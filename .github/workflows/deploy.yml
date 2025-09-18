@@ -1,0 +1,40 @@
+name: web-application via FTP CI/CD
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: windows-latest
+
+    steps:
+      # 1. 레포지토리 체크아웃
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # 2. Node.js 세팅
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20.16.0'
+
+      # 3. 의존성 설치
+      - name: Install dependencies
+        run: npm install
+
+      # 4. React 앱 빌드 (웹용)
+      - name: Build React Web App
+        run: npm run build  # dist/
+      
+      # 5. React 앱 FTP 업로드
+      - name: Deploy React App via FTP
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.4
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          local-dir: dist/
+          server-dir: /hosting/developkmj/html/flight3Dviewer/
