@@ -23,3 +23,11 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Env (절대 커밋 금지 — 시크릿)
+.env
+.env.*
+!.env.example
+
+# TS build cache
+*.tsbuildinfo
