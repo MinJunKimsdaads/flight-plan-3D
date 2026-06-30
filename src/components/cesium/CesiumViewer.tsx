@@ -1,48 +1,107 @@
 import { MAP } from "@/constants/cesiumConstant";
 import { useCesium } from "@/contexts/CesiumContext";
 import { addLayer } from "@/services/cesium/maps";
-import { Viewer,Cartesian3,Ion } from "cesium";
+import { parseFlightMessage } from "@/services/cesium/message";
+import {
+  Viewer,
+  Cartesian3,
+  Ion,
+  Entity,
+  ConstantPositionProperty,
+  Math as CesiumMath,
+  HeadingPitchRoll,
+  Transforms,
+} from "cesium";
 import { useEffect, useRef } from "react";
 import styles from '@/assets/css/cesium/Cesium.module.scss';
 import 'cesium/Build/Cesium/Widgets/widgets.css';
 
+// 부모(flight-plan)의 오리진. 이 오리진에서 온 message 만 신뢰한다.
+// TODO(보안): 호스트가 HTTPS 지원 시 https 로 전환.
+const PARENT_ORIGIN = 'http://developkmj.dothome.co.kr';
+
 const CesiumViewer = () => {
   const cesiumRef = useRef<HTMLDivElement | null>(null);
-  const {setCesium} = useCesium();
-  useEffect(()=>{
-    if(!cesiumRef.current) return;
+  const viewerRef = useRef<Viewer | null>(null);
+  const entityRef = useRef<Entity | null>(null);
+  const { setCesium } = useCesium();
 
+  // Cesium Viewer 생성 (마운트 시 1회)
+  useEffect(() => {
+    if (!cesiumRef.current) return;
+
+    // TODO(보안): Ion 토큰은 재발급 후 import.meta.env(VITE_CESIUM_ION_TOKEN)로 이전.
     Ion.defaultAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI2YWU3ZDhjZC00MmQ3LTQxMDYtYmQ0Mi1mNjJhNmYxMzY3YjIiLCJpZCI6MzE1NDkxLCJpYXQiOjE3NTA4MzY1NzJ9.WnZByGs7wVuhPUFy5tlSFtIxCfUzgtyvyDck79Jh5Zo';
-  
-    const viewer = new Viewer(cesiumRef.current,{
-      shouldAnimate: false,  // 시간 애니메이션(Clock 등)을 실행할지 여부 (true: 자동 시간 흐름)
-      timeline: false, // 하단의 타임라인 UI 표시 여부
-      animation: false, // 좌측 하단 재생/일시정지 컨트롤러 UI 표시 여부
-      baseLayerPicker: false, // 우측 상단의 지도 베이스 레이어 선택 버튼 표시 여부
-      sceneModePicker: false, // 2D/3D/Columbus View 전환 버튼 표시 여부
-      geocoder: false, // 검색창(UI 상단의 위치 검색창) 표시 여부
-      navigationHelpButton: false, // 마우스 조작법 도움말 버튼 표시 여부
-      infoBox: false, // 엔티티 클릭 시 나오는 정보 상자 UI 표시 여부
-      selectionIndicator: false, // 클릭된 엔티티의 강조 원 애니메이션 표시 여부
-      homeButton: false, // 🏠 Home 버튼 (기본 시점 복귀) 표시 여부
+
+    const viewer = new Viewer(cesiumRef.current, {
+      shouldAnimate: false,
+      timeline: false,
+      animation: false,
+      baseLayerPicker: false,
+      sceneModePicker: false,
+      geocoder: false,
+      navigationHelpButton: false,
+      infoBox: false,
+      selectionIndicator: false,
+      homeButton: false,
       useDefaultRenderLoop: true,
     });
+    viewer.scene.screenSpaceCameraController.enableRotate = false;
+    viewer.scene.screenSpaceCameraController.enableTilt = false;
+    viewer.scene.screenSpaceCameraController.enableLook = false;
 
-    // 초기 카메라 위치 설정
+    addLayer(viewer, MAP[0]);
     viewer.camera.flyTo({
       destination: Cartesian3.fromDegrees(127.1388684, 37.4449168, 2000000),
     });
 
-    addLayer(viewer,MAP[0]);
-
+    viewerRef.current = viewer;
     setCesium(viewer);
     return () => {
       viewer.destroy();
+      viewerRef.current = null;
     };
-  },[setCesium])
-  return (
-    <div ref={cesiumRef} className={styles.cesiumBox}></div>
-  );
+  }, [setCesium]);
+
+  // 부모 메시지 수신 → 기체 엔티티 렌더 + 카메라 추종 (선택 변경마다 갱신)
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      if (e.origin !== PARENT_ORIGIN) return;
+      const flight = parseFlightMessage(e.data);
+      const viewer = viewerRef.current;
+      if (!flight || !viewer) return;
+
+      const pos = Cartesian3.fromDegrees(flight.lon, flight.lat, flight.alt);
+      const cam = Cartesian3.fromDegrees(flight.lon, flight.lat - 0.075, flight.alt + 300);
+      viewer.camera.setView({
+        destination: cam,
+        orientation: { heading: CesiumMath.toRadians(0), pitch: CesiumMath.toRadians(-10), roll: 0 },
+      });
+
+      const orientation = Transforms.headingPitchRollQuaternion(
+        pos,
+        new HeadingPitchRoll(CesiumMath.toRadians(flight.heading - 90), 0, 0),
+      );
+
+      // 기존 엔티티 제거 후 재생성(스택 방지)
+      if (entityRef.current) viewer.entities.remove(entityRef.current);
+      entityRef.current = viewer.entities.add(
+        new Entity({
+          position: new ConstantPositionProperty(pos),
+          orientation,
+          model: {
+            uri: `${(CESIUM_BASE_URL as string)}data/aircraft.glb`,
+            minimumPixelSize: 500,
+            maximumScale: 100,
+          },
+        }),
+      );
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, []);
+
+  return <div ref={cesiumRef} className={styles.cesiumBox}></div>;
 };
 
 export default CesiumViewer;
