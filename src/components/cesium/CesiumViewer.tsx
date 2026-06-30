@@ -70,13 +70,16 @@ const CesiumViewer = () => {
   // 메시지 수신 + 부모에 '준비됨' 통지 (iframe onLoad 레이스 방지 핸드셰이크)
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
+      console.log('[3d] msg from', e.origin, e.data);
       if (e.origin !== PARENT_ORIGIN) return;
       const f = parseFlightMessage(e.data);
+      console.log('[3d] parsed', f);
       if (f) setFlight(f);
     };
     window.addEventListener('message', onMessage);
     // 리스너 등록 후 부모에게 알림 → 부모가 현재 기체 데이터를 (재)전송
     if (window.parent && window.parent !== window) {
+      console.log('[3d] listener ready -> send viewer-ready');
       window.parent.postMessage({ type: 'viewer-ready' }, PARENT_ORIGIN);
     }
     return () => window.removeEventListener('message', onMessage);
@@ -84,9 +87,10 @@ const CesiumViewer = () => {
 
   // flight + viewer 둘 다 준비되면 기체 엔티티 렌더 + 카메라 추종 (순서 무관)
   useEffect(() => {
-    if (!flight || !viewerReady) return;
+    if (!flight || !viewerReady) { console.log('[3d] render skip', { hasFlight: !!flight, viewerReady }); return; }
     const viewer = viewerRef.current;
     if (!viewer) return;
+    console.log('[3d] render entity', flight.lon, flight.lat, flight.alt, flight.heading);
 
     const pos = Cartesian3.fromDegrees(flight.lon, flight.lat, flight.alt);
     const cam = Cartesian3.fromDegrees(flight.lon, flight.lat - 0.075, flight.alt + 300);
