@@ -1,7 +1,7 @@
 import { MAP } from "@/constants/cesiumConstant";
 import { useCesium } from "@/contexts/CesiumContext";
 import { addLayer } from "@/services/cesium/maps";
-import { parseFlightMessage } from "@/services/cesium/message";
+import { parseFlightMessage, type FlightMessage } from "@/services/cesium/message";
 import {
   Viewer,
   Cartesian3,
@@ -12,12 +12,12 @@ import {
   HeadingPitchRoll,
   Transforms,
 } from "cesium";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import styles from '@/assets/css/cesium/Cesium.module.scss';
 import 'cesium/Build/Cesium/Widgets/widgets.css';
 
-// 부모(flight-plan)의 오리진. 이 오리진에서 온 message 만 신뢰한다.
-// TODO(보안): 호스트가 HTTPS 지원 시 https 로 전환.
+// 부모(flight-plan) origin. 이 origin 메시지만 신뢰.
+// TODO(보안): 호스트 HTTPS 지원 시 https 로 전환.
 const PARENT_ORIGIN = 'http://developkmj.dothome.co.kr';
 
 const CesiumViewer = () => {
@@ -25,6 +25,8 @@ const CesiumViewer = () => {
   const viewerRef = useRef<Viewer | null>(null);
   const entityRef = useRef<Entity | null>(null);
   const { setCesium } = useCesium();
+  const [flight, setFlight] = useState<FlightMessage | null>(null);
+  const [viewerReady, setViewerReady] = useState(false);
 
   // Cesium Viewer 생성 (마운트 시 1회)
   useEffect(() => {
@@ -57,49 +59,60 @@ const CesiumViewer = () => {
 
     viewerRef.current = viewer;
     setCesium(viewer);
+    setViewerReady(true);
     return () => {
       viewer.destroy();
       viewerRef.current = null;
+      setViewerReady(false);
     };
   }, [setCesium]);
 
-  // 부모 메시지 수신 → 기체 엔티티 렌더 + 카메라 추종 (선택 변경마다 갱신)
+  // 메시지 수신 + 부모에 '준비됨' 통지 (iframe onLoad 레이스 방지 핸드셰이크)
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
       if (e.origin !== PARENT_ORIGIN) return;
-      const flight = parseFlightMessage(e.data);
-      const viewer = viewerRef.current;
-      if (!flight || !viewer) return;
-
-      const pos = Cartesian3.fromDegrees(flight.lon, flight.lat, flight.alt);
-      const cam = Cartesian3.fromDegrees(flight.lon, flight.lat - 0.075, flight.alt + 300);
-      viewer.camera.setView({
-        destination: cam,
-        orientation: { heading: CesiumMath.toRadians(0), pitch: CesiumMath.toRadians(-10), roll: 0 },
-      });
-
-      const orientation = Transforms.headingPitchRollQuaternion(
-        pos,
-        new HeadingPitchRoll(CesiumMath.toRadians(flight.heading - 90), 0, 0),
-      );
-
-      // 기존 엔티티 제거 후 재생성(스택 방지)
-      if (entityRef.current) viewer.entities.remove(entityRef.current);
-      entityRef.current = viewer.entities.add(
-        new Entity({
-          position: new ConstantPositionProperty(pos),
-          orientation,
-          model: {
-            uri: `${(CESIUM_BASE_URL as string)}data/aircraft.glb`,
-            minimumPixelSize: 500,
-            maximumScale: 100,
-          },
-        }),
-      );
+      const f = parseFlightMessage(e.data);
+      if (f) setFlight(f);
     };
     window.addEventListener('message', onMessage);
+    // 리스너 등록 후 부모에게 알림 → 부모가 현재 기체 데이터를 (재)전송
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({ type: 'viewer-ready' }, PARENT_ORIGIN);
+    }
     return () => window.removeEventListener('message', onMessage);
   }, []);
+
+  // flight + viewer 둘 다 준비되면 기체 엔티티 렌더 + 카메라 추종 (순서 무관)
+  useEffect(() => {
+    if (!flight || !viewerReady) return;
+    const viewer = viewerRef.current;
+    if (!viewer) return;
+
+    const pos = Cartesian3.fromDegrees(flight.lon, flight.lat, flight.alt);
+    const cam = Cartesian3.fromDegrees(flight.lon, flight.lat - 0.075, flight.alt + 300);
+    viewer.camera.setView({
+      destination: cam,
+      orientation: { heading: CesiumMath.toRadians(0), pitch: CesiumMath.toRadians(-10), roll: 0 },
+    });
+
+    const orientation = Transforms.headingPitchRollQuaternion(
+      pos,
+      new HeadingPitchRoll(CesiumMath.toRadians(flight.heading - 90), 0, 0),
+    );
+
+    if (entityRef.current) viewer.entities.remove(entityRef.current);
+    entityRef.current = viewer.entities.add(
+      new Entity({
+        position: new ConstantPositionProperty(pos),
+        orientation,
+        model: {
+          uri: `${(CESIUM_BASE_URL as string)}data/aircraft.glb`,
+          minimumPixelSize: 500,
+          maximumScale: 100,
+        },
+      }),
+    );
+  }, [flight, viewerReady]);
 
   return <div ref={cesiumRef} className={styles.cesiumBox}></div>;
 };
