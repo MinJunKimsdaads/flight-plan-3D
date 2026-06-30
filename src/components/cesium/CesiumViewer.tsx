@@ -10,6 +10,7 @@ import {
   ConstantPositionProperty,
   Math as CesiumMath,
   HeadingPitchRoll,
+  HeadingPitchRange,
   Transforms,
 } from "cesium";
 import { useEffect, useRef, useState } from "react";
@@ -93,12 +94,6 @@ const CesiumViewer = () => {
     console.log('[3d] render entity', flight.lon, flight.lat, flight.alt, flight.heading);
 
     const pos = Cartesian3.fromDegrees(flight.lon, flight.lat, flight.alt);
-    const cam = Cartesian3.fromDegrees(flight.lon, flight.lat - 0.075, flight.alt + 300);
-    viewer.camera.setView({
-      destination: cam,
-      orientation: { heading: CesiumMath.toRadians(0), pitch: CesiumMath.toRadians(-10), roll: 0 },
-    });
-
     const orientation = Transforms.headingPitchRollQuaternion(
       pos,
       new HeadingPitchRoll(CesiumMath.toRadians(flight.heading - 90), 0, 0),
@@ -116,6 +111,13 @@ const CesiumViewer = () => {
         },
       }),
     );
+
+    // 초기 flyTo(한국 2000km) 애니메이션이 setView 를 덮어쓰던 문제 →
+    // 진행 중 카메라 모션을 취소하고 zoomTo 로 기체를 확실히 프레이밍.
+    viewer.camera.cancelFlight();
+    viewer
+      .zoomTo(entityRef.current, new HeadingPitchRange(0, CesiumMath.toRadians(-30), 3000))
+      .catch(() => {});
   }, [flight, viewerReady]);
 
   return <div ref={cesiumRef} className={styles.cesiumBox}></div>;
