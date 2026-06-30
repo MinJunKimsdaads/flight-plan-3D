@@ -3,7 +3,7 @@ import { useCesium } from "@/contexts/CesiumContext";
 import { addLayer } from "@/services/cesium/maps";
 import { Viewer,Cartesian3,Ion } from "cesium";
 import { useEffect, useRef } from "react";
-import styles from '@/assets/css/cesium/Cesium,.module.scss';
+import styles from '@/assets/css/cesium/Cesium.module.scss';
 import 'cesium/Build/Cesium/Widgets/widgets.css';
 
 const CesiumViewer = () => {

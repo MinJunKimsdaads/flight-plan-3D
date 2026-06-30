@@ -3,9 +3,8 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "FlightPlan application",
+  "description": "FlightPlan 3D viewer (Cesium)",
   "author": "KMJ",
-  "main": "public/electron.js",
   "scripts": {
     "dev": "vite",
     "type-check": "tsc -b",

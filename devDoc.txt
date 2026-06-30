@@ -1,0 +1,20 @@
+FlightPlan 3D Viewer — 개발 노트
+
+[현황]
+- Cesium Viewer 초기화 + OSM/Carto 베이스맵 표시.
+- useCesiumViewer 훅: 기체 엔티티 / 카메라(측면·탑뷰) / 홈 복귀 로직 보유.
+  단, 아직 CesiumViewer 에 연결되지 않음 (= WIP).
+
+[Phase 3 — 부모(flight-plan) 연동 복구]
+- window 'message' 수신부 + origin 검증 → useCesiumViewer 연결 → 기체 렌더/카메라 추종.
+- 부모 측: 선택 변경마다 re-post + HTTPS origin.
+
+[정리됨 — Phase 0~2]
+- .env 추적 해제 + gitignore, 빌드 캐시 untrack, CI 게이트 도입.
+- 죽은 네이밍(hook→hooks)/빈 파일/콤마 파일명 정리.
+
+[보류]
+- vite.config .js→.ts 일원화, 죽은 deps 제거(lockfile 재생성 필요), vite-plugin-cesium 전환.
+
+[보안 TODO — 사용자]
+- Cesium Ion 토큰 하드코딩 → 재발급 + env 이전. OpenSky 비번 회전.
