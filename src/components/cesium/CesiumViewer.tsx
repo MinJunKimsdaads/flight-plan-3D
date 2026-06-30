@@ -68,12 +68,13 @@ const CesiumViewer = () => {
   // 선택 기체를 현재(또는 지정) 시점으로 프레이밍
   const frameSelected = (mode?: 'side' | 'top') => {
     const viewer = viewerRef.current;
-    if (!viewer || !entityRef.current) return;
+    const entity = entityRef.current;
+    if (!viewer || !entity) return;
     const m = mode ?? viewModeRef.current;
     const pitch = m === 'top' ? -89 : -30;
     const range = m === 'top' ? 2600 : 3200;
     viewer.camera.cancelFlight();
-    viewer.zoomTo(entityRef.current, new HeadingPitchRange(0, CesiumMath.toRadians(pitch), range)).catch(() => {});
+    viewer.zoomTo(entity, new HeadingPitchRange(0, CesiumMath.toRadians(pitch), range)).catch(() => {});
   };
   const onHome = () => frameSelected();
   const onToggleView = () => {
@@ -144,10 +145,12 @@ const CesiumViewer = () => {
     if (!viewerReady) return;
     const viewer = viewerRef.current;
     if (!viewer) return;
-    if (!billboardsRef.current) {
-      billboardsRef.current = viewer.scene.primitives.add(new BillboardCollection());
+    let bb = billboardsRef.current;
+    if (!bb) {
+      bb = new BillboardCollection();
+      viewer.scene.primitives.add(bb);
+      billboardsRef.current = bb;
     }
-    const bb = billboardsRef.current;
     bb.removeAll();
     const img = planeIcon();
     for (const a of fleet ?? []) {
