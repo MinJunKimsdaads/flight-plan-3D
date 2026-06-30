@@ -26,15 +26,15 @@ jobs:
         run: npm install
 
       # 4. React 앱 빌드 (웹용)
+      #    base 경로는 .env 대신 여기서 주입 (.env 는 시크릿이라 더 이상 커밋하지 않음)
       - name: Build React Web App
         run: npm run build  # dist/
-      
+        env:
+          VITE_IS_ELECTRON: 'false'
+          VITE_BASE_WEB: /flight3Dviewer/
+          VITE_BASE_ELECTRON: ./
+
       # 5. React 앱 FTP 업로드
       - name: Deploy React App via FTP
         uses: SamKirkland/FTP-Deploy-Action@v4.3.4
-        with:
-          server: ${{ secrets.FTP_SERVER }}
-          username: ${{ secrets.FTP_USERNAME }}
-          password: ${{ secrets.FTP_PASSWORD }}
-          local-dir: dist/
-          server-dir: /hosting/developkmj/html/flight3Dviewer/
+        with
