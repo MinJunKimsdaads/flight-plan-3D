@@ -1,40 +1,60 @@
-name: web-application via FTP CI/CD
+name: Deploy 3D Web (FTP)
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: deploy-3d
+  cancel-in-progress: false
+
 jobs:
-  build-and-deploy:
-    runs-on: windows-latest
-
+  verify:
+    name: Type-check & build (gate)
+    runs-on: ubuntu-latest
     steps:
-      # 1. 레포지토리 체크아웃
       - name: Checkout code
-        uses: actions/checkout@v3
-
-      # 2. Node.js 세팅
+        uses: actions/checkout@v4
       - name: Setup Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
-          node-version: '20.16.0'
-
-      # 3. 의존성 설치
+          node-version: '20.19.0'
+          cache: 'npm'
       - name: Install dependencies
-        run: npm install
-
-      # 4. React 앱 빌드 (웹용)
-      #    base 경로는 .env 대신 여기서 주입 (.env 는 시크릿이라 더 이상 커밋하지 않음)
-      - name: Build React Web App
-        run: npm run build  # dist/
+        run: npm ci --fetch-retries=5 --fetch-retry-factor=2
+      - name: Build (verify)
+        run: npm run build
         env:
           VITE_IS_ELECTRON: 'false'
           VITE_BASE_WEB: /flight3Dviewer/
           VITE_BASE_ELECTRON: ./
 
-      # 5. React 앱 FTP 업로드
+  deploy:
+    name: Build & FTP deploy
+    needs: verify
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.19.0'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci --fetch-retries=5 --fetch-retry-factor=2
+      - name: Build React Web App
+        run: npm run build
+        env:
+          VITE_IS_ELECTRON: 'false'
+          VITE_BASE_WEB: /flight3Dviewer/
+          VITE_BASE_ELECTRON: ./
       - name: Deploy React App via FTP
         uses: SamKirkland/FTP-Deploy-Action@v4.3.4
-        with
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          local-dir: dist/
+          server-dir: /hosting/developkmj/html/flight3Dviewer/
