@@ -57,15 +57,44 @@ function clusterPin(): HTMLCanvasElement {
   return c;
 }
 
-const ctrlBtn: React.CSSProperties = {
-  width: 34, height: 34, display: 'flex', alignItems: 'center', justifyContent: 'center',
-  background: 'rgba(20,28,42,0.78)', border: '1px solid rgba(255,255,255,0.18)',
-  borderRadius: 8, cursor: 'pointer', padding: 0,
-};
+// 인라인 아이콘(에셋 불필요, currentColor 상속) ------------------------------
+const S = { width: 18, height: 18, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
+const IconPlus = () => (<svg {...S}><path d="M12 5v14M5 12h14" /></svg>);
+const IconMinus = () => (<svg {...S}><path d="M5 12h14" /></svg>);
+const IconNorth = () => (<svg {...S}><circle cx="12" cy="12" r="9" /><path d="M12 6.5l3 9-3-2-3 2 3-9z" fill="currentColor" stroke="none" /></svg>);
+const IconExpand = () => (<svg {...S}><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" /></svg>);
+const IconCompress = () => (<svg {...S}><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" /></svg>);
+const IconCluster = () => (<svg {...S}><circle cx="8" cy="9" r="2.3" /><circle cx="15.5" cy="8" r="2.3" /><circle cx="11.5" cy="15.5" r="2.3" /></svg>);
+const IconChevron = ({ open }: { open: boolean }) => (<svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className={`lv3d-chev${open ? ' open' : ''}`}><path d="M6 9l6 6 6-6" /></svg>);
+
+// 컨트롤 패널 스타일(단일 파일 유지 — scss 트렁케이션 회피, :hover 지원).
+const PANEL_CSS = `
+.lv3d-panel{position:absolute;top:12px;left:12px;z-index:5;display:flex;flex-direction:column;gap:6px;padding:8px;border-radius:12px;background:rgba(15,22,34,0.72);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,0.10);box-shadow:0 8px 30px rgba(0,0,0,0.40);}
+.lv3d-badge{display:flex;align-items:center;justify-content:center;gap:5px;font:600 11px/1 ui-monospace,SFMono-Regular,monospace;color:#cfe0ff;background:rgba(37,99,235,0.18);border:1px solid rgba(80,130,255,0.35);border-radius:8px;padding:6px 8px;letter-spacing:.02em;}
+.lv3d-badge svg{width:13px;height:13px;opacity:.9;}
+.lv3d-btn{width:36px;height:36px;display:flex;align-items:center;justify-content:center;padding:0;color:#dbe6f5;background:rgba(28,38,56,0.85);border:1px solid rgba(255,255,255,0.12);border-radius:9px;cursor:pointer;transition:background .15s,border-color .15s,transform .05s;}
+.lv3d-btn:hover{background:rgba(45,60,88,0.95);border-color:rgba(255,255,255,0.25);}
+.lv3d-btn:active{transform:scale(0.94);}
+.lv3d-btn.active{background:rgba(37,99,235,0.85);border-color:rgba(120,160,255,0.70);color:#fff;}
+.lv3d-btn img{width:18px;height:18px;display:block;}
+.lv3d-btn svg{display:block;}
+.lv3d-div{height:1px;margin:1px 3px;background:rgba(255,255,255,0.10);}
+.lv3d-dd{position:relative;}
+.lv3d-dd-btn{display:flex;align-items:center;justify-content:space-between;gap:6px;width:134px;color:#dbe6f5;background:rgba(28,38,56,0.85);border:1px solid rgba(255,255,255,0.12);border-radius:9px;cursor:pointer;font:500 11px/1 system-ui,sans-serif;padding:9px;transition:background .15s;}
+.lv3d-dd-btn:hover{background:rgba(45,60,88,0.95);}
+.lv3d-dd-btn span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.lv3d-dd-menu{position:absolute;top:calc(100% + 6px);left:0;width:100%;max-height:236px;overflow:auto;display:flex;flex-direction:column;gap:2px;padding:5px;border-radius:10px;background:rgba(15,22,34,0.97);border:1px solid rgba(255,255,255,0.14);box-shadow:0 12px 30px rgba(0,0,0,0.50);}
+.lv3d-dd-item{text-align:left;color:#c7d3e6;background:transparent;border:0;border-radius:7px;cursor:pointer;font:500 11px/1.2 system-ui,sans-serif;padding:8px;transition:background .12s;}
+.lv3d-dd-item:hover{background:rgba(255,255,255,0.08);color:#fff;}
+.lv3d-dd-item.active{background:rgba(37,99,235,0.65);color:#fff;}
+.lv3d-chev{transition:transform .18s;}
+.lv3d-chev.open{transform:rotate(180deg);}
+`;
 
 interface FleetPos { a: FleetAircraft; pos: Cartesian3 }
 
 const CesiumViewer = ({ externalFleet }: { externalFleet?: FleetAircraft[] | null }) => {
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const cesiumRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<Viewer | null>(null);
   const entityRef = useRef<Entity | null>(null);
@@ -79,8 +108,14 @@ const CesiumViewer = ({ externalFleet }: { externalFleet?: FleetAircraft[] | nul
   const [viewerReady, setViewerReady] = useState(false);
   const [viewMode, setViewMode] = useState<'side' | 'top'>('side');
   const [tileIdx, setTileIdx] = useState(0);
+  const [tileMenuOpen, setTileMenuOpen] = useState(false);
+  const [clusterOn, setClusterOn] = useState(true);
+  const [count, setCount] = useState(0);
+  const [isFs, setIsFs] = useState(false);
   const viewModeRef = useRef(viewMode);
   viewModeRef.current = viewMode;
+  const clusterOnRef = useRef(clusterOn);
+  clusterOnRef.current = clusterOn;
 
   const frameSelected = (mode?: 'side' | 'top') => {
     const viewer = viewerRef.current;
@@ -110,12 +145,15 @@ const CesiumViewer = ({ externalFleet }: { externalFleet?: FleetAircraft[] | nul
     const h = scene.canvas.clientHeight;
     const camWC = viewer.camera.positionWC;
     const cam = { x: camWC.x, y: camWC.y, z: camWC.z };
+    const clusterMin = clusterOnRef.current ? CLUSTER_MIN : Number.POSITIVE_INFINITY;
 
     const cells = new Map<string, FleetPos[]>();
+    let visible = 0;
     for (const fp of fleetPosRef.current) {
       if (!isFrontOfGlobe(cam, fp.pos)) continue; // 지구 반대편 제외
       const s = scene.cartesianToCanvasCoordinates(fp.pos);
       if (!s || s.x < 0 || s.x > w || s.y < 0 || s.y > h) continue; // 화면 밖 제외
+      visible++;
       const key = Math.floor(s.x / CELL) + ',' + Math.floor(s.y / CELL);
       const arr = cells.get(key);
       if (arr) arr.push(fp); else cells.set(key, [fp]);
@@ -126,7 +164,7 @@ const CesiumViewer = ({ externalFleet }: { externalFleet?: FleetAircraft[] | nul
     const pin = clusterPin();
     let modelCount = 0;
     for (const arr of cells.values()) {
-      if (arr.length >= CLUSTER_MIN) {
+      if (arr.length >= clusterMin) {
         bubbleDs.entities.add({
           position: arr[0].pos,
           billboard: {
@@ -158,8 +196,32 @@ const CesiumViewer = ({ externalFleet }: { externalFleet?: FleetAircraft[] | nul
         }
       }
     }
+    setCount(visible);
     scene.requestRender();
   };
+
+  // 줌 인/아웃 (현재 고도 비례)
+  const zoomStep = (dir: 1 | -1) => {
+    const v = viewerRef.current;
+    if (!v) return;
+    const amt = Math.max(1000, v.camera.positionCartographic.height * 0.35);
+    if (dir > 0) v.camera.zoomIn(amt); else v.camera.zoomOut(amt);
+    rebuild();
+  };
+  // 정북 리셋 (위치 유지, heading=0)
+  const resetNorth = () => {
+    const v = viewerRef.current;
+    if (!v) return;
+    v.camera.setView({ orientation: { heading: 0, pitch: v.camera.pitch, roll: 0 } });
+    rebuild();
+  };
+  // 풀스크린 토글 (뷰 루트 기준)
+  const toggleFullscreen = () => {
+    const el = rootRef.current;
+    if (!document.fullscreenElement) el?.requestFullscreen?.().catch(() => {});
+    else document.exitFullscreen?.().catch(() => {});
+  };
+  const pickTile = (i: number) => { setTileIdx(i); setTileMenuOpen(false); };
 
   // Cesium Viewer 생성 (1회)
   useEffect(() => {
@@ -189,12 +251,37 @@ const CesiumViewer = ({ externalFleet }: { externalFleet?: FleetAircraft[] | nul
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setCesium]);
 
+  // 풀스크린 상태 동기화
+  useEffect(() => {
+    const onFs = () => setIsFs(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', onFs);
+    return () => document.removeEventListener('fullscreenchange', onFs);
+  }, []);
+
+  // 드롭다운 바깥 클릭 시 닫기
+  useEffect(() => {
+    if (!tileMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (!rootRef.current?.querySelector('.lv3d-dd')?.contains(t)) setTileMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [tileMenuOpen]);
+
   // 베이스맵(타일) 전환
   useEffect(() => {
     const v = viewerRef.current;
     if (!v || !viewerReady) return;
     addLayer(v, MAP[tileIdx]);
   }, [tileIdx, viewerReady]);
+
+  // 클러스터 on/off 토글 시 재구성
+  useEffect(() => {
+    if (!viewerReady) return;
+    rebuild();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clusterOn, viewerReady]);
 
   // 메시지 수신(flight/fleet) + 준비 통지(핸드셰이크)
   useEffect(() => {
@@ -254,25 +341,61 @@ const CesiumViewer = ({ externalFleet }: { externalFleet?: FleetAircraft[] | nul
   }, [externalFleet, fleet, viewerReady]);
 
   return (
-    <div className={styles.cesiumBox}>
+    <div ref={rootRef} className={styles.cesiumBox}>
+      <style>{PANEL_CSS}</style>
       <div ref={cesiumRef} style={{ width: '100%', height: '100%' }} />
-      <div style={{ position: 'absolute', top: 12, left: 12, display: 'flex', flexDirection: 'column', gap: 8, zIndex: 5 }}>
-        <button onClick={onHome} title="선택 기체로 이동" style={ctrlBtn}>
+
+      <div className="lv3d-panel">
+        <div className="lv3d-badge" title="화면에 표시 중인 기체 수">
+          <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M21 16v-2l-8-5V3.5A1.5 1.5 0 0 0 11.5 2 1.5 1.5 0 0 0 10 3.5V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5z" /></svg>
+          {count}
+        </div>
+
+        <button className="lv3d-btn" onClick={onHome} title="선택 기체로 이동">
           <img src={homeImg} width={18} height={18} alt="home" />
         </button>
-        <button onClick={onToggleView} title="측면/탑뷰 전환" style={ctrlBtn}>
+        <button className="lv3d-btn" onClick={onToggleView} title="측면/탑뷰 전환">
           <img src={menuImg} width={18} height={18} alt="view" />
         </button>
-        <select
-          value={tileIdx}
-          onChange={(e) => setTileIdx(Number(e.target.value))}
-          title="베이스맵 전환"
-          style={{ marginTop: 2, background: 'rgba(20,28,42,0.82)', color: '#e6ecf5', border: '1px solid rgba(255,255,255,0.18)', borderRadius: 8, fontSize: 11, padding: '4px 6px', cursor: 'pointer', maxWidth: 128 }}
+
+        <div className="lv3d-div" />
+
+        <button className="lv3d-btn" onClick={() => zoomStep(1)} title="줌 인"><IconPlus /></button>
+        <button className="lv3d-btn" onClick={() => zoomStep(-1)} title="줌 아웃"><IconMinus /></button>
+        <button className="lv3d-btn" onClick={resetNorth} title="정북 정렬"><IconNorth /></button>
+        <button className="lv3d-btn" onClick={toggleFullscreen} title={isFs ? '풀스크린 종료' : '풀스크린'}>
+          {isFs ? <IconCompress /> : <IconExpand />}
+        </button>
+
+        <div className="lv3d-div" />
+
+        <button
+          className={`lv3d-btn${clusterOn ? ' active' : ''}`}
+          onClick={() => setClusterOn((v) => !v)}
+          title={clusterOn ? '클러스터링 켜짐 (클릭 시 끄기)' : '클러스터링 꺼짐 (클릭 시 켜기)'}
         >
-          {MAP.map((m, i) => (
-            <option key={m.name} value={i} style={{ color: '#000' }}>{m.name}</option>
-          ))}
-        </select>
+          <IconCluster />
+        </button>
+
+        <div className="lv3d-dd">
+          <button className="lv3d-dd-btn" onClick={() => setTileMenuOpen((o) => !o)} title="베이스맵 전환">
+            <span>{MAP[tileIdx].name}</span>
+            <IconChevron open={tileMenuOpen} />
+          </button>
+          {tileMenuOpen && (
+            <div className="lv3d-dd-menu">
+              {MAP.map((m, i) => (
+                <button
+                  key={m.name}
+                  className={`lv3d-dd-item${i === tileIdx ? ' active' : ''}`}
+                  onClick={() => pickTile(i)}
+                >
+                  {m.name}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
