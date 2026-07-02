@@ -112,7 +112,7 @@ const PANEL_CSS = `
 .lv3d-chev.open{transform:rotate(180deg);}
 `;
 
-interface FleetPos { a: FleetAircraft; pos: Cartesian3 }
+interface FleetPos { a: FleetAircraft; pos: Cartesian3; idx: number }
 
 const CesiumViewer = ({ externalFleet }: { externalFleet?: FleetAircraft[] | null }) => {
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -122,6 +122,7 @@ const CesiumViewer = ({ externalFleet }: { externalFleet?: FleetAircraft[] | nul
   const bubbleDsRef = useRef<CustomDataSource | null>(null);
   const modelDsRef = useRef<CustomDataSource | null>(null);
   const fleetPosRef = useRef<FleetPos[]>([]);
+  const modelPoolRef = useRef<Map<number, Entity>>(new Map());
   const { setCesium } = useCesium();
 
   const [flight, setFlight] = useState<FlightMessage | null>(null);
@@ -180,8 +181,11 @@ const CesiumViewer = ({ externalFleet }: { externalFleet?: FleetAircraft[] | nul
       if (arr) arr.push(fp); else cells.set(key, [fp]);
     }
 
+    // 버블은 매번 재구성(가벼운 빌보드 — 깜빡임 없음).
     bubbleDs.entities.removeAll();
-    modelDs.entities.removeAll();
+    // 모델은 풀에서 재사용 + show 토글 → 카메라 이동 시 glb 재로딩/깜빡임 방지.
+    const pool = modelPoolRef.current;
+    const used = new Set<number>();
     const pin = clusterPin();
     const ring = ringPin();
     let modelCount = 0;
@@ -206,25 +210,33 @@ const CesiumViewer = ({ externalFleet }: { externalFleet?: FleetAircraft[] | nul
       } else {
         for (const fp of arr) {
           if (modelCount >= MODEL_CAP) break;
-          const orientation = Transforms.headingPitchRollQuaternion(
-            fp.pos, new HeadingPitchRoll(CesiumMath.toRadians(fp.a.heading - 90), 0, 0),
-          );
-          modelDs.entities.add({
-            position: fp.pos,
-            orientation,
-            model: { uri: FLEET_MODEL(), minimumPixelSize: 42, maximumScale: 20000 },
-            billboard: {
-              image: ring as unknown as string,
-              verticalOrigin: VerticalOrigin.CENTER,
-              horizontalOrigin: HorizontalOrigin.CENTER,
-              disableDepthTestDistance: Number.POSITIVE_INFINITY,
-              distanceDisplayCondition: new DistanceDisplayCondition(RING_MIN_DIST, Number.MAX_VALUE),
-            },
-          });
+          let ent = pool.get(fp.idx);
+          if (!ent) {
+            const orientation = Transforms.headingPitchRollQuaternion(
+              fp.pos, new HeadingPitchRoll(CesiumMath.toRadians(fp.a.heading - 90), 0, 0),
+            );
+            ent = modelDs.entities.add({
+              position: fp.pos,
+              orientation,
+              model: { uri: FLEET_MODEL(), minimumPixelSize: 42, maximumScale: 20000 },
+              billboard: {
+                image: ring as unknown as string,
+                verticalOrigin: VerticalOrigin.CENTER,
+                horizontalOrigin: HorizontalOrigin.CENTER,
+                disableDepthTestDistance: Number.POSITIVE_INFINITY,
+                distanceDisplayCondition: new DistanceDisplayCondition(RING_MIN_DIST, Number.MAX_VALUE),
+              },
+            });
+            pool.set(fp.idx, ent);
+          }
+          ent.show = true;
+          used.add(fp.idx);
           modelCount++;
         }
       }
     }
+    // 이번 프레임에 개별 표시 안 된 모델은 숨김(파괴하지 않음).
+    for (const [idx, ent] of pool) { if (!used.has(idx)) ent.show = false; }
     setCount(visible);
     scene.requestRender();
   };
@@ -374,7 +386,10 @@ const CesiumViewer = ({ externalFleet }: { externalFleet?: FleetAircraft[] | nul
       modelDsRef.current = md;
     }
     const src = externalFleet ?? fleet;
-    fleetPosRef.current = (src ?? []).map((a) => ({ a, pos: Cartesian3.fromDegrees(a.lon, a.lat, a.alt) }));
+    fleetPosRef.current = (src ?? []).map((a, i) => ({ a, pos: Cartesian3.fromDegrees(a.lon, a.lat, a.alt), idx: i }));
+    // 위치가 바뀌므로 모델 풀 초기화(데이터 갱신 시 1회) — 이후 카메라 이동엔 재사용.
+    modelDsRef.current?.entities.removeAll();
+    modelPoolRef.current.clear();
     rebuild();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [externalFleet, fleet, viewerReady]);
