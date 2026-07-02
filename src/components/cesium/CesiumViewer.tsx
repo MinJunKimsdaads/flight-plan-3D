@@ -16,6 +16,9 @@ import {
   Color,
   VerticalOrigin,
   HorizontalOrigin,
+  DistanceDisplayCondition,
+  ScreenSpaceEventHandler,
+  ScreenSpaceEventType,
 } from "cesium";
 import { useEffect, useRef, useState } from "react";
 import styles from '@/assets/css/cesium/Cesium.module.scss';
@@ -26,6 +29,7 @@ const FLEET_MODEL = () => `${(CESIUM_BASE_URL as string)}data/aircraft.glb`;
 const CELL = 64;          // 화면 그리드 셀(px) — 이 안에 여러 대면 클러스터
 const CLUSTER_MIN = 4;    // 셀 내 이 수 이상이면 버블로 묶음
 const MODEL_CAP = 400;    // 개별 3D 모델 최대 수(성능 상한)
+const RING_MIN_DIST = 15000; // 이 거리(m)보다 가까우면 포커스 링 숨김
 
 // 지구 반대편(가려진) 점 컬링 — 구 근사 지평선 테스트.
 // Cesium EllipsoidalOccluder 는 공개 타입(.d.ts)에 없어 import 시 tsc 실패 → 자체 구현.
@@ -63,9 +67,9 @@ function ringPin(): HTMLCanvasElement {
   c.width = 60; c.height = 60;
   const x = c.getContext('2d')!;
   x.beginPath(); x.arc(30, 30, 23, 0, Math.PI * 2);
-  x.strokeStyle = 'rgba(90,170,255,0.25)'; x.lineWidth = 6; x.stroke();
+  x.strokeStyle = 'rgba(255,150,50,0.28)'; x.lineWidth = 6; x.stroke();
   x.beginPath(); x.arc(30, 30, 23, 0, Math.PI * 2);
-  x.strokeStyle = 'rgba(120,190,255,0.95)'; x.lineWidth = 2; x.stroke();
+  x.strokeStyle = 'rgba(255,140,30,0.95)'; x.lineWidth = 2; x.stroke();
   _ringPin = c;
   return c;
 }
@@ -214,6 +218,7 @@ const CesiumViewer = ({ externalFleet }: { externalFleet?: FleetAircraft[] | nul
               verticalOrigin: VerticalOrigin.CENTER,
               horizontalOrigin: HorizontalOrigin.CENTER,
               disableDepthTestDistance: Number.POSITIVE_INFINITY,
+              distanceDisplayCondition: new DistanceDisplayCondition(RING_MIN_DIST, Number.MAX_VALUE),
             },
           });
           modelCount++;
@@ -230,14 +235,14 @@ const CesiumViewer = ({ externalFleet }: { externalFleet?: FleetAircraft[] | nul
     if (!v) return;
     const amt = Math.max(1000, v.camera.positionCartographic.height * 0.35);
     if (dir > 0) v.camera.zoomIn(amt); else v.camera.zoomOut(amt);
-    rebuild();
+    requestAnimationFrame(() => rebuild());
   };
   // 정북 리셋 (위치 유지, heading=0)
   const resetNorth = () => {
     const v = viewerRef.current;
     if (!v) return;
     v.camera.setView({ orientation: { heading: 0, pitch: v.camera.pitch, roll: 0 } });
-    rebuild();
+    requestAnimationFrame(() => rebuild());
   };
   // 풀스크린 토글 (뷰 루트 기준)
   const toggleFullscreen = () => {
@@ -262,12 +267,22 @@ const CesiumViewer = ({ externalFleet }: { externalFleet?: FleetAircraft[] | nul
     viewer.scene.screenSpaceCameraController.enableTilt = false;
     viewer.scene.screenSpaceCameraController.enableLook = false;
     viewer.camera.flyTo({ destination: Cartesian3.fromDegrees(127.1388684, 37.4449168, 2000000) });
+    viewer.camera.percentageChanged = 0.2; // 카메라 변경 민감도↑ (줌 중에도 갱신)
     viewer.camera.moveEnd.addEventListener(rebuild);
+    viewer.camera.changed.addEventListener(rebuild);
+    // 항공기 위에 마우스 올리면 커서 포인터
+    const hoverHandler = new ScreenSpaceEventHandler(viewer.scene.canvas);
+    hoverHandler.setInputAction((m) => {
+      const picked = viewer.scene.pick(m.endPosition);
+      viewer.scene.canvas.style.cursor = picked && picked.id ? 'pointer' : '';
+    }, ScreenSpaceEventType.MOUSE_MOVE);
     viewerRef.current = viewer;
     setCesium(viewer);
     setViewerReady(true);
     return () => {
+      hoverHandler.destroy();
       viewer.camera.moveEnd.removeEventListener(rebuild);
+      viewer.camera.changed.removeEventListener(rebuild);
       viewer.destroy();
       viewerRef.current = null; bubbleDsRef.current = null; modelDsRef.current = null;
       setViewerReady(false);
