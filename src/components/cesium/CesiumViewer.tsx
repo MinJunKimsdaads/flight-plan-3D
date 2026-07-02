@@ -52,7 +52,7 @@ const ctrlBtn: React.CSSProperties = {
 
 interface FleetPos { a: FleetAircraft; pos: Cartesian3 }
 
-const CesiumViewer = () => {
+const CesiumViewer = ({ externalFleet }: { externalFleet?: FleetAircraft[] | null }) => {
   const cesiumRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<Viewer | null>(null);
   const entityRef = useRef<Entity | null>(null);
@@ -65,6 +65,7 @@ const CesiumViewer = () => {
   const [fleet, setFleet] = useState<FleetAircraft[] | null>(null);
   const [viewerReady, setViewerReady] = useState(false);
   const [viewMode, setViewMode] = useState<'side' | 'top'>('side');
+  const [tileIdx, setTileIdx] = useState(0);
   const viewModeRef = useRef(viewMode);
   viewModeRef.current = viewMode;
 
@@ -160,7 +161,6 @@ const CesiumViewer = () => {
     viewer.scene.screenSpaceCameraController.enableRotate = false;
     viewer.scene.screenSpaceCameraController.enableTilt = false;
     viewer.scene.screenSpaceCameraController.enableLook = false;
-    addLayer(viewer, MAP[0]);
     viewer.camera.flyTo({ destination: Cartesian3.fromDegrees(127.1388684, 37.4449168, 2000000) });
     viewer.camera.moveEnd.addEventListener(rebuild);
     viewerRef.current = viewer;
@@ -174,6 +174,13 @@ const CesiumViewer = () => {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setCesium]);
+
+  // 베이스맵(타일) 전환
+  useEffect(() => {
+    const v = viewerRef.current;
+    if (!v || !viewerReady) return;
+    addLayer(v, MAP[tileIdx]);
+  }, [tileIdx, viewerReady]);
 
   // 메시지 수신(flight/fleet) + 준비 통지(핸드셰이크)
   useEffect(() => {
@@ -226,10 +233,11 @@ const CesiumViewer = () => {
       viewer.dataSources.add(md);
       modelDsRef.current = md;
     }
-    fleetPosRef.current = (fleet ?? []).map((a) => ({ a, pos: Cartesian3.fromDegrees(a.lon, a.lat, a.alt) }));
+    const src = externalFleet ?? fleet;
+    fleetPosRef.current = (src ?? []).map((a) => ({ a, pos: Cartesian3.fromDegrees(a.lon, a.lat, a.alt) }));
     rebuild();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fleet, viewerReady]);
+  }, [externalFleet, fleet, viewerReady]);
 
   return (
     <div className={styles.cesiumBox}>
@@ -241,6 +249,16 @@ const CesiumViewer = () => {
         <button onClick={onToggleView} title="측면/탑뷰 전환" style={ctrlBtn}>
           <img src={menuImg} width={18} height={18} alt="view" />
         </button>
+        <select
+          value={tileIdx}
+          onChange={(e) => setTileIdx(Number(e.target.value))}
+          title="베이스맵 전환"
+          style={{ marginTop: 2, background: 'rgba(20,28,42,0.82)', color: '#e6ecf5', border: '1px solid rgba(255,255,255,0.18)', borderRadius: 8, fontSize: 11, padding: '4px 6px', cursor: 'pointer', maxWidth: 128 }}
+        >
+          {MAP.map((m, i) => (
+            <option key={m.name} value={i} style={{ color: '#000' }}>{m.name}</option>
+          ))}
+        </select>
       </div>
     </div>
   );
