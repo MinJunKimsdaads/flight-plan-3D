@@ -20,8 +20,6 @@ import {
 import { useEffect, useRef, useState } from "react";
 import styles from '@/assets/css/cesium/Cesium.module.scss';
 import 'cesium/Build/Cesium/Widgets/widgets.css';
-import homeImg from '@/assets/img/home.svg';
-import menuImg from '@/assets/img/menu.svg';
 
 const PARENT_ORIGIN = 'http://developkmj.dothome.co.kr';
 const FLEET_MODEL = () => `${(CESIUM_BASE_URL as string)}data/aircraft.glb`;
@@ -57,6 +55,21 @@ function clusterPin(): HTMLCanvasElement {
   return c;
 }
 
+// 개별 기체 포커스 링(헤일로 + 선명한 링) — 스크린 페이싱 빌보드용.
+let _ringPin: HTMLCanvasElement | null = null;
+function ringPin(): HTMLCanvasElement {
+  if (_ringPin) return _ringPin;
+  const c = document.createElement('canvas');
+  c.width = 60; c.height = 60;
+  const x = c.getContext('2d')!;
+  x.beginPath(); x.arc(30, 30, 23, 0, Math.PI * 2);
+  x.strokeStyle = 'rgba(90,170,255,0.25)'; x.lineWidth = 6; x.stroke();
+  x.beginPath(); x.arc(30, 30, 23, 0, Math.PI * 2);
+  x.strokeStyle = 'rgba(120,190,255,0.95)'; x.lineWidth = 2; x.stroke();
+  _ringPin = c;
+  return c;
+}
+
 // 인라인 아이콘(에셋 불필요, currentColor 상속) ------------------------------
 const S = { width: 18, height: 18, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
 const IconPlus = () => (<svg {...S}><path d="M12 5v14M5 12h14" /></svg>);
@@ -66,6 +79,10 @@ const IconExpand = () => (<svg {...S}><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15
 const IconCompress = () => (<svg {...S}><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" /></svg>);
 const IconCluster = () => (<svg {...S}><circle cx="8" cy="9" r="2.3" /><circle cx="15.5" cy="8" r="2.3" /><circle cx="11.5" cy="15.5" r="2.3" /></svg>);
 const IconChevron = ({ open }: { open: boolean }) => (<svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className={`lv3d-chev${open ? ' open' : ''}`}><path d="M6 9l6 6 6-6" /></svg>);
+const IconLocate = () => (<svg {...S}><circle cx="12" cy="12" r="7" /><path d="M12 2v3M12 19v3M2 12h3M19 12h3" /><circle cx="12" cy="12" r="1.7" fill="currentColor" stroke="none" /></svg>);
+const IconView = ({ top }: { top: boolean }) => (top
+  ? (<svg {...S}><rect x="4" y="4" width="16" height="16" rx="2" /><path d="M4 9h16M9 4v16" /></svg>)
+  : (<svg {...S}><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z" /><path d="M4 7.5l8 4.5 8-4.5M12 12v9" /></svg>));
 
 // 컨트롤 패널 스타일(단일 파일 유지 — scss 트렁케이션 회피, :hover 지원).
 const PANEL_CSS = `
@@ -162,6 +179,7 @@ const CesiumViewer = ({ externalFleet }: { externalFleet?: FleetAircraft[] | nul
     bubbleDs.entities.removeAll();
     modelDs.entities.removeAll();
     const pin = clusterPin();
+    const ring = ringPin();
     let modelCount = 0;
     for (const arr of cells.values()) {
       if (arr.length >= clusterMin) {
@@ -191,6 +209,12 @@ const CesiumViewer = ({ externalFleet }: { externalFleet?: FleetAircraft[] | nul
             position: fp.pos,
             orientation,
             model: { uri: FLEET_MODEL(), minimumPixelSize: 42, maximumScale: 20000 },
+            billboard: {
+              image: ring as unknown as string,
+              verticalOrigin: VerticalOrigin.CENTER,
+              horizontalOrigin: HorizontalOrigin.CENTER,
+              disableDepthTestDistance: Number.POSITIVE_INFINITY,
+            },
           });
           modelCount++;
         }
@@ -352,10 +376,10 @@ const CesiumViewer = ({ externalFleet }: { externalFleet?: FleetAircraft[] | nul
         </div>
 
         <button className="lv3d-btn" onClick={onHome} title="선택 기체로 이동">
-          <img src={homeImg} width={18} height={18} alt="home" />
+          <IconLocate />
         </button>
-        <button className="lv3d-btn" onClick={onToggleView} title="측면/탑뷰 전환">
-          <img src={menuImg} width={18} height={18} alt="view" />
+        <button className="lv3d-btn" onClick={onToggleView} title={viewMode === 'top' ? '측면 뷰로 전환' : '탑 뷰로 전환'}>
+          <IconView top={viewMode === 'top'} />
         </button>
 
         <div className="lv3d-div" />
