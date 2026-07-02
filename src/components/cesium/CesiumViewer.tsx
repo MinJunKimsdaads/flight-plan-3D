@@ -3,6 +3,7 @@ import { useCesium } from "@/contexts/CesiumContext";
 import { addLayer } from "@/services/cesium/maps";
 import { parseFlightMessage, parseFleetMessage, type FlightMessage, type FleetAircraft } from "@/services/cesium/message";
 import type { Aircraft } from "@/services/aircraft";
+import { useUIStore } from "@/store/uiStore";
 import {
   Viewer,
   Cartesian3,
@@ -150,7 +151,8 @@ const CesiumViewer = ({ externalFleet }: { externalFleet?: FleetAC[] | null }) =
   const [clusterOn, setClusterOn] = useState(true);
   const [count, setCount] = useState(0);
   const [isFs, setIsFs] = useState(false);
-  const [selected, setSelected] = useState<FleetAC | null>(null);
+  const selected = useUIStore((s) => s.selected);
+  const setSelected = useUIStore((s) => s.setSelected);
   const viewModeRef = useRef(viewMode);
   viewModeRef.current = viewMode;
   const clusterOnRef = useRef(clusterOn);
