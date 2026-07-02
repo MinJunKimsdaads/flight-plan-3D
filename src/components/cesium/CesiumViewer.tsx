@@ -3,7 +3,8 @@ import { useCesium } from "@/contexts/CesiumContext";
 import { addLayer } from "@/services/cesium/maps";
 import { parseFlightMessage, parseFleetMessage, type FlightMessage, type FleetAircraft } from "@/services/cesium/message";
 import type { Aircraft } from "@/services/aircraft";
-import { useUIStore } from "@/store/uiStore";
+import { useUIStore, matchAircraft } from "@/store/uiStore";
+import FleetPanel from "@/components/cesium/FleetPanel";
 import {
   Viewer,
   Cartesian3,
@@ -22,6 +23,7 @@ import {
   ScreenSpaceEventHandler,
   ScreenSpaceEventType,
   Cartographic,
+  UrlTemplateImageryProvider,
 } from "cesium";
 import { useEffect, useRef, useState } from "react";
 import styles from '@/assets/css/cesium/Cesium.module.scss';
@@ -90,6 +92,7 @@ const IconLocate = () => (<svg {...S}><circle cx="12" cy="12" r="7" /><path d="M
 const IconView = ({ top }: { top: boolean }) => (top
   ? (<svg {...S}><rect x="4" y="4" width="16" height="16" rx="2" /><path d="M4 9h16M9 4v16" /></svg>)
   : (<svg {...S}><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z" /><path d="M4 7.5l8 4.5 8-4.5M12 12v9" /></svg>));
+const IconWeather = () => (<svg {...S}><path d="M7 15a4 4 0 0 1 .5-8 5 5 0 0 1 9.4 1.3A3.4 3.4 0 0 1 16.5 15H7z" /><path d="M8 18l-1 2.5M12 18l-1 2.5M16 18l-1 2.5" /></svg>);
 
 // 컨트롤 패널 스타일(단일 파일 유지 — scss 트렁케이션 회피, :hover 지원).
 const PANEL_CSS = `
@@ -113,7 +116,7 @@ const PANEL_CSS = `
 .lv3d-dd-item.active{background:rgba(37,99,235,0.65);color:#fff;}
 .lv3d-chev{transition:transform .18s;}
 .lv3d-chev.open{transform:rotate(180deg);}
-.lv3d-info{position:absolute;top:12px;left:12px;z-index:6;width:236px;padding:12px 14px;border-radius:12px;background:rgba(15,22,34,0.86);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,0.12);box-shadow:0 8px 30px rgba(0,0,0,0.45);color:#e6ecf5;font:400 12px/1.55 system-ui,sans-serif;}
+.lv3d-info{position:absolute;bottom:12px;left:12px;z-index:6;width:236px;padding:12px 14px;border-radius:12px;background:rgba(15,22,34,0.86);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,0.12);box-shadow:0 8px 30px rgba(0,0,0,0.45);color:#e6ecf5;font:400 12px/1.55 system-ui,sans-serif;}
 .lv3d-info h4{margin:0 0 9px;font:700 14px/1.2 system-ui,sans-serif;letter-spacing:.02em;display:flex;align-items:center;justify-content:space-between;gap:8px;}
 .lv3d-info h4 .cs{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .lv3d-info .close{cursor:pointer;background:none;border:0;color:#9fb0c8;font-size:19px;line-height:1;padding:0 2px;}
@@ -121,6 +124,33 @@ const PANEL_CSS = `
 .lv3d-info dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:5px 12px;}
 .lv3d-info dt{color:#8ea3c0;white-space:nowrap;}
 .lv3d-info dd{margin:0;text-align:right;font-variant-numeric:tabular-nums;}
+.lv3d-fab{position:absolute;top:12px;left:12px;z-index:6;cursor:pointer;color:#dbe6f5;background:rgba(15,22,34,0.82);border:1px solid rgba(255,255,255,0.12);border-radius:10px;font:600 12px/1 system-ui,sans-serif;padding:9px 12px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);}
+.lv3d-fab:hover{background:rgba(45,60,88,0.92);}
+.lv3d-fleet{position:absolute;top:12px;left:12px;z-index:6;width:250px;max-height:calc(100% - 24px);overflow:auto;display:flex;flex-direction:column;gap:9px;padding:12px;border-radius:12px;background:rgba(15,22,34,0.88);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,0.12);box-shadow:0 8px 30px rgba(0,0,0,0.45);color:#e6ecf5;font:400 12px/1.4 system-ui,sans-serif;}
+.lv3d-fleet-h{display:flex;align-items:center;justify-content:space-between;font:700 13px/1.2 system-ui,sans-serif;}
+.lv3d-fleet-h .close{cursor:pointer;background:none;border:0;color:#9fb0c8;font-size:18px;line-height:1;padding:0 2px;}
+.lv3d-fleet-h .close:hover{color:#fff;}
+.lv3d-search{width:100%;box-sizing:border-box;background:rgba(28,38,56,0.9);border:1px solid rgba(255,255,255,0.14);border-radius:8px;color:#e6ecf5;font:400 12px system-ui,sans-serif;padding:8px 10px;outline:none;}
+.lv3d-search:focus{border-color:rgba(120,160,255,0.6);}
+.lv3d-row{display:flex;align-items:center;justify-content:space-between;gap:8px;color:#c7d3e6;}
+.lv3d-row select{background:rgba(28,38,56,0.9);border:1px solid rgba(255,255,255,0.14);border-radius:7px;color:#e6ecf5;font:400 11px system-ui,sans-serif;padding:5px 7px;cursor:pointer;max-width:150px;}
+.lv3d-row input[type=checkbox]{accent-color:#f5a03c;width:15px;height:15px;}
+.lv3d-stats{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;}
+.lv3d-stats>div{background:rgba(28,38,56,0.7);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:7px 5px;text-align:center;}
+.lv3d-stats b{display:block;font:700 15px/1.1 ui-monospace,monospace;color:#fff;}
+.lv3d-stats span{font-size:9.5px;color:#8ea3c0;}
+.lv3d-top-h{font:600 11px system-ui,sans-serif;color:#8ea3c0;margin-bottom:4px;}
+.lv3d-bar{display:grid;grid-template-columns:74px 1fr 26px;align-items:center;gap:6px;margin-bottom:3px;font-size:11px;}
+.lv3d-bar .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#c7d3e6;}
+.lv3d-bar .bar{height:7px;background:rgba(255,255,255,0.08);border-radius:4px;overflow:hidden;}
+.lv3d-bar .bar i{display:block;height:100%;background:linear-gradient(90deg,#f5a03c,#ff7a1a);}
+.lv3d-bar .ct{text-align:right;color:#9fb0c8;font-variant-numeric:tabular-nums;}
+.lv3d-list{display:flex;flex-direction:column;gap:2px;max-height:186px;overflow:auto;}
+.lv3d-li{display:flex;align-items:center;justify-content:space-between;gap:8px;background:transparent;border:0;border-radius:6px;color:#dbe6f5;cursor:pointer;padding:6px 7px;font:500 11px system-ui,sans-serif;text-align:left;}
+.lv3d-li:hover{background:rgba(255,255,255,0.07);}
+.lv3d-li .cs{font-weight:700;}
+.lv3d-li .co{color:#8ea3c0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:112px;}
+.lv3d-more{color:#8ea3c0;font-size:10px;text-align:center;padding:3px;}
 `;
 
 // 부모 postMessage는 4필드, 독립형(OpenSky)은 리치 필드 → 교집합 타입.
@@ -153,6 +183,13 @@ const CesiumViewer = ({ externalFleet }: { externalFleet?: FleetAC[] | null }) =
   const [isFs, setIsFs] = useState(false);
   const selected = useUIStore((s) => s.selected);
   const setSelected = useUIStore((s) => s.setSelected);
+  const query = useUIStore((s) => s.query);
+  const filters = useUIStore((s) => s.filters);
+  const setAircraft = useUIStore((s) => s.setAircraft);
+  const weatherOn = useUIStore((s) => s.weatherOn);
+  const toggleWeather = useUIStore((s) => s.toggleWeather);
+  const filterRef = useRef({ query, filters });
+  filterRef.current = { query, filters };
   const viewModeRef = useRef(viewMode);
   viewModeRef.current = viewMode;
   const clusterOnRef = useRef(clusterOn);
@@ -194,6 +231,7 @@ const CesiumViewer = ({ externalFleet }: { externalFleet?: FleetAC[] | null }) =
       if (!isFrontOfGlobe(cam, fp.pos)) continue; // 지구 반대편 제외
       const s = scene.cartesianToCanvasCoordinates(fp.pos);
       if (!s || s.x < 0 || s.x > w || s.y < 0 || s.y > h) continue; // 화면 밖 제외
+      if (!matchAircraft(fp.a, filterRef.current.query, filterRef.current.filters)) continue; // 검색/필터
       visible++;
       const key = Math.floor(s.x / CELL) + ',' + Math.floor(s.y / CELL);
       const arr = cells.get(key);
@@ -368,12 +406,45 @@ const CesiumViewer = ({ externalFleet }: { externalFleet?: FleetAC[] | null }) =
     addLayer(v, MAP[tileIdx]);
   }, [tileIdx, viewerReady]);
 
+  // 기상(RainViewer 레이더) 오버레이 — 베이스맵 위. 타일 변경 시 재적용, 끄면 제거.
+  useEffect(() => {
+    const v = viewerRef.current;
+    if (!v || !viewerReady || !weatherOn) return;
+    let cancelled = false;
+    let layer: ReturnType<typeof v.imageryLayers.addImageryProvider> | null = null;
+    fetch('https://api.rainviewer.com/public/weather-maps.json')
+      .then((r) => r.json())
+      .then((j) => {
+        if (cancelled) return;
+        const past = (j?.radar?.past ?? []) as Array<{ path: string }>;
+        const frame = past[past.length - 1];
+        if (!frame) return;
+        const host = (j?.host as string) || 'https://tilecache.rainviewer.com';
+        const provider = new UrlTemplateImageryProvider({
+          url: `${host}${frame.path}/256/{z}/{x}/{y}/4/1_1.png`,
+          maximumLevel: 12,
+        });
+        layer = v.imageryLayers.addImageryProvider(provider);
+        layer.alpha = 0.6;
+        v.scene.requestRender();
+      })
+      .catch(() => {});
+    return () => { cancelled = true; if (layer) v.imageryLayers.remove(layer); };
+  }, [weatherOn, tileIdx, viewerReady]);
+
   // 클러스터 on/off 토글 시 재구성
   useEffect(() => {
     if (!viewerReady) return;
     rebuild();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clusterOn, viewerReady]);
+
+  // 검색/필터 변경 시 재구성
+  useEffect(() => {
+    if (!viewerReady) return;
+    rebuild();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, filters, viewerReady]);
 
   // 메시지 수신(flight/fleet) + 준비 통지(핸드셰이크)
   useEffect(() => {
@@ -428,6 +499,7 @@ const CesiumViewer = ({ externalFleet }: { externalFleet?: FleetAC[] | null }) =
     }
     const src = externalFleet ?? fleet;
     fleetPosRef.current = (src ?? []).map((a, i) => ({ a, pos: Cartesian3.fromDegrees(a.lon, a.lat, a.alt), idx: i }));
+    setAircraft((src ?? []) as FleetAC[]);
     // 위치가 바뀌므로 모델 풀 초기화(데이터 갱신 시 1회) — 이후 카메라 이동엔 재사용.
     modelDsRef.current?.entities.removeAll();
     modelPoolRef.current.clear();
@@ -471,6 +543,13 @@ const CesiumViewer = ({ externalFleet }: { externalFleet?: FleetAC[] | null }) =
         >
           <IconCluster />
         </button>
+        <button
+          className={`lv3d-btn${weatherOn ? ' active' : ''}`}
+          onClick={toggleWeather}
+          title={weatherOn ? '기상 레이더 켜짐 (클릭 시 끄기)' : '기상 레이더 (클릭 시 켜기)'}
+        >
+          <IconWeather />
+        </button>
 
         <div className="lv3d-dd">
           <button className="lv3d-dd-btn" onClick={() => setTileMenuOpen((o) => !o)} title="베이스맵 전환">
@@ -492,6 +571,8 @@ const CesiumViewer = ({ externalFleet }: { externalFleet?: FleetAC[] | null }) =
           )}
         </div>
       </div>
+
+      <FleetPanel />
 
       {selected && (
         <div className="lv3d-info">
