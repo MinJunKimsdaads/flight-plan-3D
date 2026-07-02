@@ -16,7 +16,6 @@ import {
   Color,
   VerticalOrigin,
   HorizontalOrigin,
-  EllipsoidalOccluder,
 } from "cesium";
 import { useEffect, useRef, useState } from "react";
 import styles from '@/assets/css/cesium/Cesium.module.scss';
@@ -29,6 +28,20 @@ const FLEET_MODEL = () => `${(CESIUM_BASE_URL as string)}data/aircraft.glb`;
 const CELL = 64;          // 화면 그리드 셀(px) — 이 안에 여러 대면 클러스터
 const CLUSTER_MIN = 4;    // 셀 내 이 수 이상이면 버블로 묶음
 const MODEL_CAP = 400;    // 개별 3D 모델 최대 수(성능 상한)
+
+// 지구 반대편(가려진) 점 컬링 — 구 근사 지평선 테스트.
+// Cesium EllipsoidalOccluder 는 공개 타입(.d.ts)에 없어 import 시 tsc 실패 → 자체 구현.
+// 시선(카메라→점) 선분이 평균반경 구를 관통하면 가려진 것으로 판단.
+const GLOBE_R = 6_371_000; // 지구 평균반경(m)
+function isFrontOfGlobe(cam: { x: number; y: number; z: number }, p: Cartesian3): boolean {
+  const dx = p.x - cam.x, dy = p.y - cam.y, dz = p.z - cam.z;
+  const dd = dx * dx + dy * dy + dz * dz;
+  if (dd === 0) return true;
+  const t = -(cam.x * dx + cam.y * dy + cam.z * dz) / dd; // 선분상 최근접점 파라미터
+  if (t <= 0 || t >= 1) return true;                      // 최근접점이 선분 밖 → 관통 안 함
+  const nx = cam.x + t * dx, ny = cam.y + t * dy, nz = cam.z + t * dz;
+  return nx * nx + ny * ny + nz * nz >= GLOBE_R * GLOBE_R;
+}
 
 // 클러스터 버블(원형) 아이콘.
 let _clusterPin: HTMLCanvasElement | null = null;
@@ -95,11 +108,12 @@ const CesiumViewer = ({ externalFleet }: { externalFleet?: FleetAircraft[] | nul
     const scene = viewer.scene;
     const w = scene.canvas.clientWidth;
     const h = scene.canvas.clientHeight;
-    const occluder = new EllipsoidalOccluder(scene.globe.ellipsoid, viewer.camera.positionWC);
+    const camWC = viewer.camera.positionWC;
+    const cam = { x: camWC.x, y: camWC.y, z: camWC.z };
 
     const cells = new Map<string, FleetPos[]>();
     for (const fp of fleetPosRef.current) {
-      if (!occluder.isPointVisible(fp.pos)) continue; // 지구 반대편 제외
+      if (!isFrontOfGlobe(cam, fp.pos)) continue; // 지구 반대편 제외
       const s = scene.cartesianToCanvasCoordinates(fp.pos);
       if (!s || s.x < 0 || s.x > w || s.y < 0 || s.y > h) continue; // 화면 밖 제외
       const key = Math.floor(s.x / CELL) + ',' + Math.floor(s.y / CELL);
