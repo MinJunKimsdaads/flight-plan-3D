@@ -90,7 +90,7 @@ const IconView = ({ top }: { top: boolean }) => (top
 
 // 컨트롤 패널 스타일(단일 파일 유지 — scss 트렁케이션 회피, :hover 지원).
 const PANEL_CSS = `
-.lv3d-panel{position:absolute;top:12px;left:12px;z-index:5;display:flex;flex-direction:column;gap:6px;padding:8px;border-radius:12px;background:rgba(15,22,34,0.72);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,0.10);box-shadow:0 8px 30px rgba(0,0,0,0.40);}
+.lv3d-panel{position:absolute;top:12px;right:12px;z-index:5;display:flex;flex-direction:column;gap:6px;padding:8px;border-radius:12px;background:rgba(15,22,34,0.72);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,0.10);box-shadow:0 8px 30px rgba(0,0,0,0.40);}
 .lv3d-badge{display:flex;align-items:center;justify-content:center;gap:5px;font:600 11px/1 ui-monospace,SFMono-Regular,monospace;color:#cfe0ff;background:rgba(37,99,235,0.18);border:1px solid rgba(80,130,255,0.35);border-radius:8px;padding:6px 8px;letter-spacing:.02em;}
 .lv3d-badge svg{width:13px;height:13px;opacity:.9;}
 .lv3d-btn{width:36px;height:36px;display:flex;align-items:center;justify-content:center;padding:0;color:#dbe6f5;background:rgba(28,38,56,0.85);border:1px solid rgba(255,255,255,0.12);border-radius:9px;cursor:pointer;transition:background .15s,border-color .15s,transform .05s;}
