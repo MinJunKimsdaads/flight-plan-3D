@@ -16,6 +16,7 @@ import {
   Color,
   VerticalOrigin,
   HorizontalOrigin,
+  EllipsoidalOccluder,
 } from "cesium";
 import { useEffect, useRef, useState } from "react";
 import styles from '@/assets/css/cesium/Cesium.module.scss';
@@ -24,13 +25,12 @@ import homeImg from '@/assets/img/home.svg';
 import menuImg from '@/assets/img/menu.svg';
 
 const PARENT_ORIGIN = 'http://developkmj.dothome.co.kr';
-// LOD 임계 카메라 고도(m). 이보다 낮게(줌인) 내려가면 개별 3D 모델로 전환.
-const LOD_HEIGHT = 400000;
-// 줌인 시 3D 모델로 그릴 최대 대수(카메라에 가까운 순).
-const MAX_MODELS = 200;
 const FLEET_MODEL = () => `${(CESIUM_BASE_URL as string)}data/aircraft.glb`;
+const CELL = 64;          // 화면 그리드 셀(px) — 이 안에 여러 대면 클러스터
+const CLUSTER_MIN = 4;    // 셀 내 이 수 이상이면 버블로 묶음
+const MODEL_CAP = 400;    // 개별 3D 모델 최대 수(성능 상한)
 
-// 클러스터 버블(원형) 아이콘. 개수는 라벨로.
+// 클러스터 버블(원형) 아이콘.
 let _clusterPin: HTMLCanvasElement | null = null;
 function clusterPin(): HTMLCanvasElement {
   if (_clusterPin) return _clusterPin;
@@ -41,24 +41,6 @@ function clusterPin(): HTMLCanvasElement {
   x.fillStyle = 'rgba(37,99,235,0.9)'; x.fill();
   x.lineWidth = 2.5; x.strokeStyle = 'rgba(255,255,255,0.95)'; x.stroke();
   _clusterPin = c;
-  return c;
-}
-// 개별 항공기(클러스터 소자)용 작은 비행기 아이콘.
-let _planeIcon: HTMLCanvasElement | null = null;
-function planeIcon(): HTMLCanvasElement {
-  if (_planeIcon) return _planeIcon;
-  const c = document.createElement('canvas');
-  c.width = 24; c.height = 24;
-  const x = c.getContext('2d')!;
-  x.translate(12, 12);
-  x.fillStyle = '#f59e0b'; x.strokeStyle = 'rgba(50,33,0,0.85)'; x.lineWidth = 1;
-  x.beginPath();
-  x.moveTo(0, -10); x.lineTo(1.6, -2.4); x.lineTo(10, 2.5); x.lineTo(10, 4); x.lineTo(1.6, 1.6);
-  x.lineTo(1.2, 7.5); x.lineTo(4, 10); x.lineTo(4, 11); x.lineTo(0, 9);
-  x.lineTo(-4, 11); x.lineTo(-4, 10); x.lineTo(-1.2, 7.5); x.lineTo(-1.6, 1.6);
-  x.lineTo(-10, 4); x.lineTo(-10, 2.5); x.lineTo(-1.6, -2.4);
-  x.closePath(); x.fill(); x.stroke();
-  _planeIcon = c;
   return c;
 }
 
@@ -74,7 +56,7 @@ const CesiumViewer = () => {
   const cesiumRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<Viewer | null>(null);
   const entityRef = useRef<Entity | null>(null);
-  const clusterDsRef = useRef<CustomDataSource | null>(null);
+  const bubbleDsRef = useRef<CustomDataSource | null>(null);
   const modelDsRef = useRef<CustomDataSource | null>(null);
   const fleetPosRef = useRef<FleetPos[]>([]);
   const { setCesium } = useCesium();
@@ -103,32 +85,65 @@ const CesiumViewer = () => {
     frameSelected(next);
   };
 
-  // LOD: 고도에 따라 클러스터(멀리) ↔ 개별 3D 모델(가까이) 전환
-  const updateLod = () => {
+  // 화면 그리드 클러스터링: 뭉친 셀=버블, 개별=3D 모델. (카메라 이동/데이터 갱신마다 재구성)
+  const rebuild = () => {
     const viewer = viewerRef.current;
-    const clusterDs = clusterDsRef.current;
+    const bubbleDs = bubbleDsRef.current;
     const modelDs = modelDsRef.current;
-    if (!viewer || !clusterDs || !modelDs) return;
-    const zoomedIn = viewer.camera.positionCartographic.height <= LOD_HEIGHT;
-    clusterDs.show = !zoomedIn;
-    modelDs.show = zoomedIn;
-    if (!zoomedIn) { modelDs.entities.removeAll(); return; }
-    const cam = viewer.camera.positionWC;
-    const near = [...fleetPosRef.current]
-      .sort((p, q) => Cartesian3.distanceSquared(cam, p.pos) - Cartesian3.distanceSquared(cam, q.pos))
-      .slice(0, MAX_MODELS);
-    modelDs.entities.removeAll();
-    for (const { a, pos } of near) {
-      const orientation = Transforms.headingPitchRollQuaternion(
-        pos, new HeadingPitchRoll(CesiumMath.toRadians(a.heading - 90), 0, 0),
-      );
-      modelDs.entities.add({
-        position: pos,
-        orientation,
-        model: { uri: FLEET_MODEL(), minimumPixelSize: 48, maximumScale: 20000 },
-      });
+    if (!viewer || !bubbleDs || !modelDs) return;
+    const scene = viewer.scene;
+    const w = scene.canvas.clientWidth;
+    const h = scene.canvas.clientHeight;
+    const occluder = new EllipsoidalOccluder(scene.globe.ellipsoid, viewer.camera.positionWC);
+
+    const cells = new Map<string, FleetPos[]>();
+    for (const fp of fleetPosRef.current) {
+      if (!occluder.isPointVisible(fp.pos)) continue; // 지구 반대편 제외
+      const s = scene.cartesianToCanvasCoordinates(fp.pos);
+      if (!s || s.x < 0 || s.x > w || s.y < 0 || s.y > h) continue; // 화면 밖 제외
+      const key = Math.floor(s.x / CELL) + ',' + Math.floor(s.y / CELL);
+      const arr = cells.get(key);
+      if (arr) arr.push(fp); else cells.set(key, [fp]);
     }
-    viewer.scene.requestRender();
+
+    bubbleDs.entities.removeAll();
+    modelDs.entities.removeAll();
+    const pin = clusterPin();
+    let modelCount = 0;
+    for (const arr of cells.values()) {
+      if (arr.length >= CLUSTER_MIN) {
+        bubbleDs.entities.add({
+          position: arr[0].pos,
+          billboard: {
+            image: pin as unknown as string,
+            verticalOrigin: VerticalOrigin.CENTER,
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          },
+          label: {
+            text: String(arr.length),
+            font: 'bold 13px sans-serif',
+            fillColor: Color.WHITE,
+            verticalOrigin: VerticalOrigin.CENTER,
+            horizontalOrigin: HorizontalOrigin.CENTER,
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          },
+        });
+      } else {
+        for (const fp of arr) {
+          if (modelCount >= MODEL_CAP) break;
+          const orientation = Transforms.headingPitchRollQuaternion(
+            fp.pos, new HeadingPitchRoll(CesiumMath.toRadians(fp.a.heading - 90), 0, 0),
+          );
+          modelDs.entities.add({
+            position: fp.pos,
+            orientation,
+            model: { uri: FLEET_MODEL(), minimumPixelSize: 42, maximumScale: 20000 },
+          });
+          modelCount++;
+        }
+      }
+    }
+    scene.requestRender();
   };
 
   // Cesium Viewer 생성 (1회)
@@ -147,15 +162,14 @@ const CesiumViewer = () => {
     viewer.scene.screenSpaceCameraController.enableLook = false;
     addLayer(viewer, MAP[0]);
     viewer.camera.flyTo({ destination: Cartesian3.fromDegrees(127.1388684, 37.4449168, 2000000) });
-    // 카메라 멈출 때마다 LOD 재평가
-    viewer.camera.moveEnd.addEventListener(updateLod);
+    viewer.camera.moveEnd.addEventListener(rebuild);
     viewerRef.current = viewer;
     setCesium(viewer);
     setViewerReady(true);
     return () => {
-      viewer.camera.moveEnd.removeEventListener(updateLod);
+      viewer.camera.moveEnd.removeEventListener(rebuild);
       viewer.destroy();
-      viewerRef.current = null; clusterDsRef.current = null; modelDsRef.current = null;
+      viewerRef.current = null; bubbleDsRef.current = null; modelDsRef.current = null;
       setViewerReady(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -197,58 +211,23 @@ const CesiumViewer = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flight, viewerReady]);
 
-  // 전체 항공기(fleet): 클러스터(멀리) DataSource 구성 + LOD 반영
+  // fleet 수신 → 위치 캐시 + 데이터소스 준비 + 재구성
   useEffect(() => {
     if (!viewerReady) return;
     const viewer = viewerRef.current;
     if (!viewer) return;
-    let clusterDs = clusterDsRef.current;
-    if (!clusterDs) {
-      clusterDs = new CustomDataSource('fleet-cluster');
-      viewer.dataSources.add(clusterDs);
-      clusterDs.clustering.enabled = true;
-      clusterDs.clustering.pixelRange = 42;
-      clusterDs.clustering.minimumClusterSize = 3;
-      const pin = clusterPin();
-      clusterDs.clustering.clusterEvent.addEventListener((clustered, cluster) => {
-        cluster.billboard.show = true;
-        cluster.billboard.image = pin as unknown as string;
-        cluster.billboard.verticalOrigin = VerticalOrigin.CENTER;
-        cluster.billboard.disableDepthTestDistance = Number.POSITIVE_INFINITY;
-        cluster.label.show = true;
-        cluster.label.text = String(clustered.length);
-        cluster.label.font = 'bold 13px sans-serif';
-        cluster.label.fillColor = Color.WHITE;
-        cluster.label.verticalOrigin = VerticalOrigin.CENTER;
-        cluster.label.horizontalOrigin = HorizontalOrigin.CENTER;
-        cluster.label.disableDepthTestDistance = Number.POSITIVE_INFINITY;
-      });
-      clusterDsRef.current = clusterDs;
+    if (!bubbleDsRef.current) {
+      const bd = new CustomDataSource('fleet-bubble');
+      viewer.dataSources.add(bd);
+      bubbleDsRef.current = bd;
     }
     if (!modelDsRef.current) {
       const md = new CustomDataSource('fleet-model');
       viewer.dataSources.add(md);
       modelDsRef.current = md;
     }
-    // 클러스터용 빌보드 엔티티(전량) + 위치 캐시
-    const img = planeIcon();
-    const positions: FleetPos[] = [];
-    clusterDs.entities.removeAll();
-    for (const a of fleet ?? []) {
-      const pos = Cartesian3.fromDegrees(a.lon, a.lat, a.alt);
-      positions.push({ a, pos });
-      clusterDs.entities.add({
-        position: pos,
-        billboard: {
-          image: img as unknown as string,
-          scale: 0.8,
-          rotation: CesiumMath.toRadians(-a.heading),
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
-        },
-      });
-    }
-    fleetPosRef.current = positions;
-    updateLod();
+    fleetPosRef.current = (fleet ?? []).map((a) => ({ a, pos: Cartesian3.fromDegrees(a.lon, a.lat, a.alt) }));
+    rebuild();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fleet, viewerReady]);
 
