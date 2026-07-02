@@ -2,6 +2,7 @@ import { MAP } from "@/constants/cesiumConstant";
 import { useCesium } from "@/contexts/CesiumContext";
 import { addLayer } from "@/services/cesium/maps";
 import { parseFlightMessage, parseFleetMessage, type FlightMessage, type FleetAircraft } from "@/services/cesium/message";
+import type { Aircraft } from "@/services/aircraft";
 import {
   Viewer,
   Cartesian3,
@@ -19,6 +20,7 @@ import {
   DistanceDisplayCondition,
   ScreenSpaceEventHandler,
   ScreenSpaceEventType,
+  Cartographic,
 } from "cesium";
 import { useEffect, useRef, useState } from "react";
 import styles from '@/assets/css/cesium/Cesium.module.scss';
@@ -110,11 +112,25 @@ const PANEL_CSS = `
 .lv3d-dd-item.active{background:rgba(37,99,235,0.65);color:#fff;}
 .lv3d-chev{transition:transform .18s;}
 .lv3d-chev.open{transform:rotate(180deg);}
+.lv3d-info{position:absolute;top:12px;left:12px;z-index:6;width:236px;padding:12px 14px;border-radius:12px;background:rgba(15,22,34,0.86);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,0.12);box-shadow:0 8px 30px rgba(0,0,0,0.45);color:#e6ecf5;font:400 12px/1.55 system-ui,sans-serif;}
+.lv3d-info h4{margin:0 0 9px;font:700 14px/1.2 system-ui,sans-serif;letter-spacing:.02em;display:flex;align-items:center;justify-content:space-between;gap:8px;}
+.lv3d-info h4 .cs{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.lv3d-info .close{cursor:pointer;background:none;border:0;color:#9fb0c8;font-size:19px;line-height:1;padding:0 2px;}
+.lv3d-info .close:hover{color:#fff;}
+.lv3d-info dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:5px 12px;}
+.lv3d-info dt{color:#8ea3c0;white-space:nowrap;}
+.lv3d-info dd{margin:0;text-align:right;font-variant-numeric:tabular-nums;}
 `;
 
-interface FleetPos { a: FleetAircraft; pos: Cartesian3; idx: number }
+// 부모 postMessage는 4필드, 독립형(OpenSky)은 리치 필드 → 교집합 타입.
+type FleetAC = FleetAircraft & Partial<Aircraft>;
+const fmtAlt = (m: number | null | undefined) => (m == null ? '-' : `${Math.round(m).toLocaleString()} m · ${Math.round(m * 3.281).toLocaleString()} ft`);
+const fmtSpd = (ms: number | null | undefined) => (ms == null ? '-' : `${Math.round(ms * 3.6).toLocaleString()} km/h · ${Math.round(ms * 1.94384)} kt`);
+const fmtVs = (ms: number | null | undefined) => (ms == null ? '-' : `${ms > 0 ? '▲' : ms < 0 ? '▼' : ''} ${Math.abs(Math.round(ms))} m/s`);
 
-const CesiumViewer = ({ externalFleet }: { externalFleet?: FleetAircraft[] | null }) => {
+interface FleetPos { a: FleetAC; pos: Cartesian3; idx: number }
+
+const CesiumViewer = ({ externalFleet }: { externalFleet?: FleetAC[] | null }) => {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const cesiumRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<Viewer | null>(null);
@@ -134,6 +150,7 @@ const CesiumViewer = ({ externalFleet }: { externalFleet?: FleetAircraft[] | nul
   const [clusterOn, setClusterOn] = useState(true);
   const [count, setCount] = useState(0);
   const [isFs, setIsFs] = useState(false);
+  const [selected, setSelected] = useState<FleetAC | null>(null);
   const viewModeRef = useRef(viewMode);
   viewModeRef.current = viewMode;
   const clusterOnRef = useRef(clusterOn);
@@ -191,7 +208,7 @@ const CesiumViewer = ({ externalFleet }: { externalFleet?: FleetAircraft[] | nul
     let modelCount = 0;
     for (const arr of cells.values()) {
       if (arr.length >= clusterMin) {
-        bubbleDs.entities.add({
+        const b = bubbleDs.entities.add({
           position: arr[0].pos,
           billboard: {
             image: pin as unknown as string,
@@ -207,6 +224,7 @@ const CesiumViewer = ({ externalFleet }: { externalFleet?: FleetAircraft[] | nul
             disableDepthTestDistance: Number.POSITIVE_INFINITY,
           },
         });
+        (b as unknown as Record<string, unknown>)._clusterPos = arr[0].pos;
       } else {
         for (const fp of arr) {
           if (modelCount >= MODEL_CAP) break;
@@ -228,6 +246,7 @@ const CesiumViewer = ({ externalFleet }: { externalFleet?: FleetAircraft[] | nul
               },
             });
             pool.set(fp.idx, ent);
+            (ent as unknown as Record<string, unknown>)._idx = fp.idx;
           }
           ent.show = true;
           used.add(fp.idx);
@@ -288,6 +307,26 @@ const CesiumViewer = ({ externalFleet }: { externalFleet?: FleetAircraft[] | nul
       const picked = viewer.scene.pick(m.endPosition);
       viewer.scene.canvas.style.cursor = picked && picked.id ? 'pointer' : '';
     }, ScreenSpaceEventType.MOUSE_MOVE);
+    // 클릭: 개별 기체 → 상세 팝업 / 클러스터 → 확대 / 빈 곳 → 닫기
+    hoverHandler.setInputAction((e) => {
+      const picked = viewer.scene.pick(e.position);
+      const id = picked && picked.id;
+      if (id && typeof id._idx === 'number') {
+        const fpa = fleetPosRef.current[id._idx];
+        if (fpa) setSelected(fpa.a);
+        return;
+      }
+      if (id && id._clusterPos) {
+        const carto = Cartographic.fromCartesian(id._clusterPos);
+        const hgt = viewer.camera.positionCartographic.height;
+        viewer.camera.flyTo({
+          destination: Cartesian3.fromRadians(carto.longitude, carto.latitude, Math.max(25000, hgt * 0.45)),
+          duration: 0.6,
+        });
+        return;
+      }
+      setSelected(null);
+    }, ScreenSpaceEventType.LEFT_CLICK);
     viewerRef.current = viewer;
     setCesium(viewer);
     setViewerReady(true);
@@ -451,6 +490,24 @@ const CesiumViewer = ({ externalFleet }: { externalFleet?: FleetAircraft[] | nul
           )}
         </div>
       </div>
+
+      {selected && (
+        <div className="lv3d-info">
+          <h4>
+            <span className="cs">{(selected.callsign && selected.callsign.trim()) || selected.icao24 || '항공기'}</span>
+            <button className="close" onClick={() => setSelected(null)} aria-label="닫기">×</button>
+          </h4>
+          <dl>
+            <dt>국가</dt><dd>{selected.origin_country || '-'}</dd>
+            <dt>고도</dt><dd>{fmtAlt(selected.alt)}</dd>
+            <dt>속도</dt><dd>{fmtSpd(selected.velocity)}</dd>
+            <dt>방향</dt><dd>{Number.isFinite(selected.heading) ? `${Math.round(selected.heading)}°` : '-'}</dd>
+            <dt>수직</dt><dd>{fmtVs(selected.vertical_rate)}</dd>
+            <dt>상태</dt><dd>{selected.on_ground == null ? '-' : (selected.on_ground ? '지상' : '비행 중')}</dd>
+            <dt>위치</dt><dd>{selected.lat.toFixed(3)}, {selected.lon.toFixed(3)}</dd>
+          </dl>
+        </div>
+      )}
     </div>
   );
 };
