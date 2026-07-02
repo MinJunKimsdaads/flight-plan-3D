@@ -12,7 +12,10 @@ import {
   HeadingPitchRoll,
   HeadingPitchRange,
   Transforms,
-  BillboardCollection,
+  CustomDataSource,
+  Color,
+  VerticalOrigin,
+  HorizontalOrigin,
 } from "cesium";
 import { useEffect, useRef, useState } from "react";
 import styles from '@/assets/css/cesium/Cesium.module.scss';
@@ -22,7 +25,7 @@ import menuImg from '@/assets/img/menu.svg';
 
 const PARENT_ORIGIN = 'http://developkmj.dothome.co.kr';
 
-// fleet 빌보드용 비행기 아이콘(canvas) — SVG 렌더 의존 없이 1회 생성해 공유.
+// 개별 항공기 빌보드용 비행기 아이콘(canvas). SVG 의존 없이 1회 생성해 공유.
 let _planeIcon: HTMLCanvasElement | null = null;
 function planeIcon(): HTMLCanvasElement {
   if (_planeIcon) return _planeIcon;
@@ -45,6 +48,20 @@ function planeIcon(): HTMLCanvasElement {
   return c;
 }
 
+// 클러스터 버블(원형) 아이콘. 개수는 라벨로 표기.
+let _clusterPin: HTMLCanvasElement | null = null;
+function clusterPin(): HTMLCanvasElement {
+  if (_clusterPin) return _clusterPin;
+  const c = document.createElement('canvas');
+  c.width = 44; c.height = 44;
+  const x = c.getContext('2d')!;
+  x.beginPath(); x.arc(22, 22, 18, 0, Math.PI * 2);
+  x.fillStyle = 'rgba(37,99,235,0.9)'; x.fill();
+  x.lineWidth = 2.5; x.strokeStyle = 'rgba(255,255,255,0.95)'; x.stroke();
+  _clusterPin = c;
+  return c;
+}
+
 const ctrlBtn: React.CSSProperties = {
   width: 34, height: 34, display: 'flex', alignItems: 'center', justifyContent: 'center',
   background: 'rgba(20,28,42,0.78)', border: '1px solid rgba(255,255,255,0.18)',
@@ -55,7 +72,7 @@ const CesiumViewer = () => {
   const cesiumRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<Viewer | null>(null);
   const entityRef = useRef<Entity | null>(null);
-  const billboardsRef = useRef<BillboardCollection | null>(null);
+  const fleetDsRef = useRef<CustomDataSource | null>(null);
   const { setCesium } = useCesium();
 
   const [flight, setFlight] = useState<FlightMessage | null>(null);
@@ -65,7 +82,6 @@ const CesiumViewer = () => {
   const viewModeRef = useRef(viewMode);
   viewModeRef.current = viewMode;
 
-  // 선택 기체를 현재(또는 지정) 시점으로 프레이밍
   const frameSelected = (mode?: 'side' | 'top') => {
     const viewer = viewerRef.current;
     const entity = entityRef.current;
@@ -102,7 +118,7 @@ const CesiumViewer = () => {
     viewerRef.current = viewer;
     setCesium(viewer);
     setViewerReady(true);
-    return () => { viewer.destroy(); viewerRef.current = null; billboardsRef.current = null; setViewerReady(false); };
+    return () => { viewer.destroy(); viewerRef.current = null; fleetDsRef.current = null; setViewerReady(false); };
   }, [setCesium]);
 
   // 메시지 수신(flight/fleet) + 준비 통지(핸드셰이크)
@@ -136,29 +152,50 @@ const CesiumViewer = () => {
       orientation,
       model: { uri: `${(CESIUM_BASE_URL as string)}data/aircraft.glb`, minimumPixelSize: 500, maximumScale: 100 },
     }));
-    frameSelected();
+    viewer.camera.cancelFlight();
+    viewer.zoomTo(entityRef.current, new HeadingPitchRange(0, CesiumMath.toRadians(-30), 3200)).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flight, viewerReady]);
 
-  // 전체 항공기(fleet): 빌보드로 일괄 렌더(heading 회전)
+  // 전체 항공기(fleet): 클러스터링 DataSource. 개별=비행기 아이콘, 클러스터=카운트 버블.
   useEffect(() => {
     if (!viewerReady) return;
     const viewer = viewerRef.current;
     if (!viewer) return;
-    let bb = billboardsRef.current;
-    if (!bb) {
-      bb = new BillboardCollection();
-      viewer.scene.primitives.add(bb);
-      billboardsRef.current = bb;
+    let ds = fleetDsRef.current;
+    if (!ds) {
+      ds = new CustomDataSource('fleet');
+      viewer.dataSources.add(ds);
+      ds.clustering.enabled = true;
+      ds.clustering.pixelRange = 42;
+      ds.clustering.minimumClusterSize = 3;
+      const pin = clusterPin();
+      ds.clustering.clusterEvent.addEventListener((clustered, cluster) => {
+        cluster.billboard.show = true;
+        cluster.billboard.image = pin as unknown as string;
+        cluster.billboard.verticalOrigin = VerticalOrigin.CENTER;
+        cluster.billboard.disableDepthTestDistance = Number.POSITIVE_INFINITY;
+        cluster.label.show = true;
+        cluster.label.text = String(clustered.length);
+        cluster.label.font = 'bold 13px sans-serif';
+        cluster.label.fillColor = Color.WHITE;
+        cluster.label.verticalOrigin = VerticalOrigin.CENTER;
+        cluster.label.horizontalOrigin = HorizontalOrigin.CENTER;
+        cluster.label.disableDepthTestDistance = Number.POSITIVE_INFINITY;
+      });
+      fleetDsRef.current = ds;
     }
-    bb.removeAll();
+    ds.entities.removeAll();
     const img = planeIcon();
     for (const a of fleet ?? []) {
-      bb.add({
+      ds.entities.add({
         position: Cartesian3.fromDegrees(a.lon, a.lat, a.alt),
-        image: img,
-        scale: 0.7,
-        rotation: CesiumMath.toRadians(-a.heading),
+        billboard: {
+          image: img as unknown as string,
+          scale: 0.7,
+          rotation: CesiumMath.toRadians(-a.heading),
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
       });
     }
     viewer.scene.requestRender();
