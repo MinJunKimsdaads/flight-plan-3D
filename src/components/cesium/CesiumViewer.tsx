@@ -24,31 +24,13 @@ import homeImg from '@/assets/img/home.svg';
 import menuImg from '@/assets/img/menu.svg';
 
 const PARENT_ORIGIN = 'http://developkmj.dothome.co.kr';
+// LOD 임계 카메라 고도(m). 이보다 낮게(줌인) 내려가면 개별 3D 모델로 전환.
+const LOD_HEIGHT = 400000;
+// 줌인 시 3D 모델로 그릴 최대 대수(카메라에 가까운 순).
+const MAX_MODELS = 200;
+const FLEET_MODEL = () => `${(CESIUM_BASE_URL as string)}data/aircraft.glb`;
 
-// 개별 항공기 빌보드용 비행기 아이콘(canvas). SVG 의존 없이 1회 생성해 공유.
-let _planeIcon: HTMLCanvasElement | null = null;
-function planeIcon(): HTMLCanvasElement {
-  if (_planeIcon) return _planeIcon;
-  const c = document.createElement('canvas');
-  c.width = 28; c.height = 28;
-  const x = c.getContext('2d')!;
-  x.translate(14, 14);
-  x.fillStyle = '#f59e0b';
-  x.strokeStyle = 'rgba(50,33,0,0.85)';
-  x.lineWidth = 1;
-  x.beginPath();
-  x.moveTo(0, -12);
-  x.lineTo(2, -3); x.lineTo(12, 3); x.lineTo(12, 5); x.lineTo(2, 2);
-  x.lineTo(1.5, 9); x.lineTo(5, 12); x.lineTo(5, 13); x.lineTo(0, 11);
-  x.lineTo(-5, 13); x.lineTo(-5, 12); x.lineTo(-1.5, 9); x.lineTo(-2, 2);
-  x.lineTo(-12, 5); x.lineTo(-12, 3); x.lineTo(-2, -3);
-  x.closePath();
-  x.fill(); x.stroke();
-  _planeIcon = c;
-  return c;
-}
-
-// 클러스터 버블(원형) 아이콘. 개수는 라벨로 표기.
+// 클러스터 버블(원형) 아이콘. 개수는 라벨로.
 let _clusterPin: HTMLCanvasElement | null = null;
 function clusterPin(): HTMLCanvasElement {
   if (_clusterPin) return _clusterPin;
@@ -61,6 +43,24 @@ function clusterPin(): HTMLCanvasElement {
   _clusterPin = c;
   return c;
 }
+// 개별 항공기(클러스터 소자)용 작은 비행기 아이콘.
+let _planeIcon: HTMLCanvasElement | null = null;
+function planeIcon(): HTMLCanvasElement {
+  if (_planeIcon) return _planeIcon;
+  const c = document.createElement('canvas');
+  c.width = 24; c.height = 24;
+  const x = c.getContext('2d')!;
+  x.translate(12, 12);
+  x.fillStyle = '#f59e0b'; x.strokeStyle = 'rgba(50,33,0,0.85)'; x.lineWidth = 1;
+  x.beginPath();
+  x.moveTo(0, -10); x.lineTo(1.6, -2.4); x.lineTo(10, 2.5); x.lineTo(10, 4); x.lineTo(1.6, 1.6);
+  x.lineTo(1.2, 7.5); x.lineTo(4, 10); x.lineTo(4, 11); x.lineTo(0, 9);
+  x.lineTo(-4, 11); x.lineTo(-4, 10); x.lineTo(-1.2, 7.5); x.lineTo(-1.6, 1.6);
+  x.lineTo(-10, 4); x.lineTo(-10, 2.5); x.lineTo(-1.6, -2.4);
+  x.closePath(); x.fill(); x.stroke();
+  _planeIcon = c;
+  return c;
+}
 
 const ctrlBtn: React.CSSProperties = {
   width: 34, height: 34, display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -68,11 +68,15 @@ const ctrlBtn: React.CSSProperties = {
   borderRadius: 8, cursor: 'pointer', padding: 0,
 };
 
+interface FleetPos { a: FleetAircraft; pos: Cartesian3 }
+
 const CesiumViewer = () => {
   const cesiumRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<Viewer | null>(null);
   const entityRef = useRef<Entity | null>(null);
-  const fleetDsRef = useRef<CustomDataSource | null>(null);
+  const clusterDsRef = useRef<CustomDataSource | null>(null);
+  const modelDsRef = useRef<CustomDataSource | null>(null);
+  const fleetPosRef = useRef<FleetPos[]>([]);
   const { setCesium } = useCesium();
 
   const [flight, setFlight] = useState<FlightMessage | null>(null);
@@ -99,6 +103,34 @@ const CesiumViewer = () => {
     frameSelected(next);
   };
 
+  // LOD: 고도에 따라 클러스터(멀리) ↔ 개별 3D 모델(가까이) 전환
+  const updateLod = () => {
+    const viewer = viewerRef.current;
+    const clusterDs = clusterDsRef.current;
+    const modelDs = modelDsRef.current;
+    if (!viewer || !clusterDs || !modelDs) return;
+    const zoomedIn = viewer.camera.positionCartographic.height <= LOD_HEIGHT;
+    clusterDs.show = !zoomedIn;
+    modelDs.show = zoomedIn;
+    if (!zoomedIn) { modelDs.entities.removeAll(); return; }
+    const cam = viewer.camera.positionWC;
+    const near = [...fleetPosRef.current]
+      .sort((p, q) => Cartesian3.distanceSquared(cam, p.pos) - Cartesian3.distanceSquared(cam, q.pos))
+      .slice(0, MAX_MODELS);
+    modelDs.entities.removeAll();
+    for (const { a, pos } of near) {
+      const orientation = Transforms.headingPitchRollQuaternion(
+        pos, new HeadingPitchRoll(CesiumMath.toRadians(a.heading - 90), 0, 0),
+      );
+      modelDs.entities.add({
+        position: pos,
+        orientation,
+        model: { uri: FLEET_MODEL(), minimumPixelSize: 48, maximumScale: 20000 },
+      });
+    }
+    viewer.scene.requestRender();
+  };
+
   // Cesium Viewer 생성 (1회)
   useEffect(() => {
     if (!cesiumRef.current) return;
@@ -115,10 +147,18 @@ const CesiumViewer = () => {
     viewer.scene.screenSpaceCameraController.enableLook = false;
     addLayer(viewer, MAP[0]);
     viewer.camera.flyTo({ destination: Cartesian3.fromDegrees(127.1388684, 37.4449168, 2000000) });
+    // 카메라 멈출 때마다 LOD 재평가
+    viewer.camera.moveEnd.addEventListener(updateLod);
     viewerRef.current = viewer;
     setCesium(viewer);
     setViewerReady(true);
-    return () => { viewer.destroy(); viewerRef.current = null; fleetDsRef.current = null; setViewerReady(false); };
+    return () => {
+      viewer.camera.moveEnd.removeEventListener(updateLod);
+      viewer.destroy();
+      viewerRef.current = null; clusterDsRef.current = null; modelDsRef.current = null;
+      setViewerReady(false);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setCesium]);
 
   // 메시지 수신(flight/fleet) + 준비 통지(핸드셰이크)
@@ -150,27 +190,27 @@ const CesiumViewer = () => {
     entityRef.current = viewer.entities.add(new Entity({
       position: new ConstantPositionProperty(pos),
       orientation,
-      model: { uri: `${(CESIUM_BASE_URL as string)}data/aircraft.glb`, minimumPixelSize: 500, maximumScale: 100 },
+      model: { uri: FLEET_MODEL(), minimumPixelSize: 500, maximumScale: 100 },
     }));
     viewer.camera.cancelFlight();
     viewer.zoomTo(entityRef.current, new HeadingPitchRange(0, CesiumMath.toRadians(-30), 3200)).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flight, viewerReady]);
 
-  // 전체 항공기(fleet): 클러스터링 DataSource. 개별=비행기 아이콘, 클러스터=카운트 버블.
+  // 전체 항공기(fleet): 클러스터(멀리) DataSource 구성 + LOD 반영
   useEffect(() => {
     if (!viewerReady) return;
     const viewer = viewerRef.current;
     if (!viewer) return;
-    let ds = fleetDsRef.current;
-    if (!ds) {
-      ds = new CustomDataSource('fleet');
-      viewer.dataSources.add(ds);
-      ds.clustering.enabled = true;
-      ds.clustering.pixelRange = 42;
-      ds.clustering.minimumClusterSize = 3;
+    let clusterDs = clusterDsRef.current;
+    if (!clusterDs) {
+      clusterDs = new CustomDataSource('fleet-cluster');
+      viewer.dataSources.add(clusterDs);
+      clusterDs.clustering.enabled = true;
+      clusterDs.clustering.pixelRange = 42;
+      clusterDs.clustering.minimumClusterSize = 3;
       const pin = clusterPin();
-      ds.clustering.clusterEvent.addEventListener((clustered, cluster) => {
+      clusterDs.clustering.clusterEvent.addEventListener((clustered, cluster) => {
         cluster.billboard.show = true;
         cluster.billboard.image = pin as unknown as string;
         cluster.billboard.verticalOrigin = VerticalOrigin.CENTER;
@@ -183,22 +223,33 @@ const CesiumViewer = () => {
         cluster.label.horizontalOrigin = HorizontalOrigin.CENTER;
         cluster.label.disableDepthTestDistance = Number.POSITIVE_INFINITY;
       });
-      fleetDsRef.current = ds;
+      clusterDsRef.current = clusterDs;
     }
-    ds.entities.removeAll();
+    if (!modelDsRef.current) {
+      const md = new CustomDataSource('fleet-model');
+      viewer.dataSources.add(md);
+      modelDsRef.current = md;
+    }
+    // 클러스터용 빌보드 엔티티(전량) + 위치 캐시
     const img = planeIcon();
+    const positions: FleetPos[] = [];
+    clusterDs.entities.removeAll();
     for (const a of fleet ?? []) {
-      ds.entities.add({
-        position: Cartesian3.fromDegrees(a.lon, a.lat, a.alt),
+      const pos = Cartesian3.fromDegrees(a.lon, a.lat, a.alt);
+      positions.push({ a, pos });
+      clusterDs.entities.add({
+        position: pos,
         billboard: {
           image: img as unknown as string,
-          scale: 0.7,
+          scale: 0.8,
           rotation: CesiumMath.toRadians(-a.heading),
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
       });
     }
-    viewer.scene.requestRender();
+    fleetPosRef.current = positions;
+    updateLod();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fleet, viewerReady]);
 
   return (
