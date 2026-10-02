@@ -1,0 +1,8 @@
+{
+  "$comment": "kmjHarness 핸드셰이크 (프로젝트 측). kmjh가 관리합니다.",
+  "harness": "0.2.0",
+  "profile": "react-vite",
+  "addons": [],
+  "level": 3,
+  "release": false
+}

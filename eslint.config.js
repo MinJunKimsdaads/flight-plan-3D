@@ -1,28 +1,14 @@
-import js from '@eslint/js'
-import globals from 'globals'
-import reactHooks from 'eslint-plugin-react-hooks'
-import reactRefresh from 'eslint-plugin-react-refresh'
-import tseslint from 'typescript-eslint'
+// 이 파일은 당신의 영역입니다. kmjh가 덮어쓰지 않습니다.
+// 공통 규칙은 .kmjharness/eslint.config.js (kmjHarness react-vite 프로필) 에 있고, 여기서 프로젝트 예외만 덧붙이세요.
+// 예전에 여기 있던 규칙(react-hooks · react-refresh)은 공통 규칙에 그대로 들어 있습니다.
+import harness from './.kmjharness/eslint.config.js';
 
-export default tseslint.config(
-  { ignores: ['dist'] },
-  {
-    extends: [js.configs.recommended, ...tseslint.configs.recommended],
-    files: ['**/*.{ts,tsx}'],
-    languageOptions: {
-      ecmaVersion: 2020,
-      globals: globals.browser,
-    },
-    plugins: {
-      'react-hooks': reactHooks,
-      'react-refresh': reactRefresh,
-    },
-    rules: {
-      ...reactHooks.configs.recommended.rules,
-      'react-refresh/only-export-components': [
-        'warn',
-        { allowConstantExport: true },
-      ],
-    },
-  },
-)
+export default [
+  ...harness,
+
+  // 설정 파일이 두 곳(루트·.kmjharness)이라 typescript-eslint 최신판이 기준 폴더를 못 정하는 것을 막음
+  { languageOptions: { parserOptions: { tsconfigRootDir: import.meta.dirname } } },
+
+  // 예) 이 프로젝트에서만 더 엄격하게:
+  // { files: ['**/*.{ts,tsx}'], rules: { 'react-hooks/exhaustive-deps': 'error' } },
+];
