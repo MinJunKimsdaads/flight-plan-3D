@@ -2,9 +2,14 @@
   "$comment": "kmjh가 생성했습니다. 관리 파일의 해시 — 직접 수정하지 마세요.",
   "harness": "0.2.0",
   "level": 3,
-  "appliedAt": "2026-10-02T04:43:33.191Z",
+  "appliedAt": "2026-10-06T01:26:23.658Z",
   "files": {
-    ".github/workflows/kmjh-verify.yml": "061bc2eaf7c6f8f7",
+    "AGENTS.md": {
+      "hash": "43ac46d8f457e417",
+      "scope": "block"
+    },
+    ".editorconfig": "30fe29ee9ca7c19c",
+    ".github/workflows/kmjh-verify.yml": "f226c135d184210e",
     ".prettierrc": "2e74eb33ce3f3ce0",
     ".gitattributes": "92a1bab1d3a76991",
     ".kmjharness/eslint.config.js": "0980651171eafc81"
